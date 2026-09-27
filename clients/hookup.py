@@ -66,6 +66,7 @@ class TBankAPI:
 
     def classify_operation(self, raw: dict) -> NormalizedOperation:
         """ Нормализация операций для дальнейшего использования"""
+
         purpose = raw.get('paymentPurpose', '').lower()
         purpose_raw = raw.get('paymentPurpose', '')
         is_self_payer = raw['payerInn'] == self._my_inn
@@ -135,6 +136,5 @@ class TBankAPI:
         data = self._connect()
 
         operations = [self.classify_operation(op) for op in data]
-        counterparty = []
 
         return operations
