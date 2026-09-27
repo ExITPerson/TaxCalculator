@@ -12,3 +12,5 @@ BUSINESS_TOKEN = os.getenv('BUSINESS_TOKEN')
 BUSINESS_URL = os.getenv('BUSINESS_URL')
 DATE_FROM = '2026-08-01'
 PAYLOAD = {'from': DATE_FROM}
+MY_INN = os.getenv('MY_INN')
+BANK_INN = os.getenv('BANK_INN')
