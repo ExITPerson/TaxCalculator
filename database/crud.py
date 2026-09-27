@@ -1,4 +1,5 @@
-from typing import List
+from datetime import datetime
+from typing import List, Optional
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -68,11 +69,11 @@ class CrudDB:
         existing_cp = {}
 
         if needed_inns:
-            cp_rows = {
+            cp_rows = (
                 self.__session.query(CounterpartyDB)
                 .filter(CounterpartyDB.inn.in_(needed_inns))
                 .all()
-            }
+            )
             existing_cp = {cp.inn: cp for cp in cp_rows if cp.inn}
 
         #Обработка
@@ -128,3 +129,155 @@ class CrudDB:
 
         self.__session.commit()
         return stats
+
+    def get_all_operations(self):
+        """ Получение всех операций из БД """
+        operations = (self.__session
+                      .query(OperationsDB)
+                      .all())
+        return operations
+
+    def get_all_counterparties(self):
+        """ Получение всех контрагентов их БД """
+        counterparties = (self.__session
+                          .query(CounterpartyDB)
+                          .all()
+                          )
+        return counterparties
+
+    def get_operations_by_counterparty(self, inn: str) -> List[OperationsDB]:
+        operations = (self.__session.query(OperationsDB)
+                      .join(CounterpartyDB, OperationsDB.counterparty_id == CounterpartyDB.id)
+                      .filter(CounterpartyDB.inn == inn)
+                      .order_by(OperationsDB.date.desc())
+                      .all()
+                      )
+        return operations
+
+    def get_sums_by_counterparty(self) -> List[dict]:
+        """
+        Группирует суммы по контрагентам.
+        Разделяет на поступления и расходы.
+        """
+        results = (
+            self.__session.query(
+                CounterpartyDB.name.label("name"),
+                CounterpartyDB.inn.label("inn"),
+                OperationsDB.direction.label("direction"),
+                func.sum(OperationsDB.amount).label("total"),
+                func.count(OperationsDB.operation_id).label("count"),
+            )
+            .join(CounterpartyDB, OperationsDB.counterparty_id == CounterpartyDB.id)
+            .group_by(CounterpartyDB.id, CounterpartyDB.name, CounterpartyDB.inn, OperationsDB.direction)
+            .all()
+        )
+
+        counterparties: dict[str, dict] = {}
+
+        for row in results:
+            key = row.inn
+            if key not in counterparties:
+                counterparties[key] = {
+                    "name": row.name,
+                    "inn": row.inn,
+                    "income": 0.0,
+                    "expense": 0.0,
+                    "income_count": 0,
+                    "expense_count": 0,
+                }
+            if row.direction == "IN":
+                counterparties[key]["income"] += float(row.total)
+                counterparties[key]["income_count"] += row.count
+            else:
+                counterparties[key]["expense"] += float(row.total)
+                counterparties[key]["expense_count"] += row.count
+
+        # Добавляем оборот и сальдо
+        for cp in counterparties.values():
+            cp["turnover"] = cp["income"] + cp["expense"]
+            cp["balance"] = cp["income"] - cp["expense"]
+
+        return sorted(
+            counterparties.values(),
+            key=lambda x: x["turnover"],
+            reverse=True,
+        )
+
+    def get_sums_by_category_and_counterparty(self, category: str) -> List[dict]:
+        """
+        Группирует суммы по контрагентам внутри конкретной категории.
+        Полезно для анализа: «показать все поступления по контрагентам».
+        """
+        results = (
+            self.__session.query(
+                CounterpartyDB.name.label("name"),
+                CounterpartyDB.inn.label("inn"),
+                func.sum(OperationsDB.amount).label("total"),
+                func.count(OperationsDB.operation_id).label("count"),
+            )
+            .join(CounterpartyDB, OperationsDB.counterparty_id == CounterpartyDB.id)
+            .filter(OperationsDB.category == category)
+            .group_by(CounterpartyDB.id, CounterpartyDB.name, CounterpartyDB.inn)
+            .order_by(func.sum(OperationsDB.amount).desc())
+            .all()
+        )
+
+        return [
+            {
+                "name": row.name,
+                "inn": row.inn,
+                "total": float(row.total),
+                "count": row.count,
+            }
+            for row in results
+        ]
+
+    def get_sums_by_category(self, date_from: Optional[datetime] = None, date_to: Optional[datetime] = None) -> List[
+        dict]:
+        """
+        Группирует суммы по категориям операций.
+        Опционально фильтрует по периоду.
+        """
+        query = (
+            self.__session.query(
+                OperationsDB.category.label("category"),
+                OperationsDB.direction.label("direction"),
+                func.sum(OperationsDB.amount).label("total"),
+                func.count(OperationsDB.operation_id).label("count"),
+            )
+            .group_by(OperationsDB.category, OperationsDB.direction)
+        )
+
+        if date_from:
+            query = query.filter(OperationsDB.date >= date_from)
+        if date_to:
+            query = query.filter(OperationsDB.date <= date_to)
+
+        results = query.all()
+
+        categories: dict[str, dict] = {}
+
+        for row in results:
+            cat = row.category
+            if cat not in categories:
+                categories[cat] = {
+                    "category": cat,
+                    "income": 0.0,
+                    "expense": 0.0,
+                    "income_count": 0,
+                    "expense_count": 0,
+                }
+            if row.direction == "IN":
+                categories[cat]["income"] += float(row.total)
+                categories[cat]["income_count"] += row.count
+            else:
+                categories[cat]["expense"] += float(row.total)
+                categories[cat]["expense_count"] += row.count
+
+        for cat in categories.values():
+            cat["total"] = cat["income"] + cat["expense"]
+            cat["net"] = cat["income"] - cat["expense"]
+
+        return sorted(categories.values(), key=lambda x: x["total"], reverse=True)
+
+

@@ -5,7 +5,8 @@ import requests
 import re
 
 from clients.normalized import Counterparty, NormalizedOperation, OperationCategory
-from config.settings import BUSINESS_TOKEN, BUSINESS_URL, PAYLOAD, MY_INN, BANK_INN
+from config.settings import BUSINESS_TOKEN, BUSINESS_URL, PAYLOAD, MY_INN, BANK_INN, KBK_PENSION_PREFIX, \
+    KBK_SOCIAL_PREFIX, KBK_ACCIDENT_PREFIX, TAX_AUTHORITY_INN, SOCIAL_FUND_INN
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -73,7 +74,7 @@ class TBankAPI:
         is_self_recipient = raw['recipientInn'] == self._my_inn
         is_bank_recipient = raw['recipientInn'] == self._bank_inn
 
-        #Направление движения средств
+        # Направление движения средств
         if not is_self_payer and is_self_recipient:
             direction = "IN"
         elif is_self_payer and not is_self_recipient:
@@ -82,17 +83,47 @@ class TBankAPI:
             direction = "INTERNAL"
 
         merchant = None
+        kbk = raw.get('kbk', '')
 
-        # 1. Комиссии и платы банка
-        if is_bank_recipient and any(kw in purpose for kw in ["плата за", "комиссия"]):
+        # Проверка на госорганы
+        is_tax_authority = raw['recipientInn'] == TAX_AUTHORITY_INN
+        is_social_fund = raw['recipientInn'] == SOCIAL_FUND_INN
+
+        # Ключевые слова для выплаты ЗП
+        salary_keywords = ["аванс", "зарплат", "зп ", "заработн", "оклад", "за вычетом"]
+        is_salary = (
+                direction == "OUT"
+                and raw["operationType"] == "01"
+                and any(kw in purpose for kw in salary_keywords)
+        )
+
+        # 1. Налоговые платежи (ЕНП и прочие налоги через ФНС)
+        if direction == "OUT" and (is_tax_authority or kbk.startswith("182")):
+            category = OperationCategory.TAX_PAYMENT
+
+        # 2. Страховые и пенсионные взносы
+        elif direction == "OUT" and (
+                is_social_fund
+                or kbk.startswith((KBK_PENSION_PREFIX, KBK_SOCIAL_PREFIX, KBK_ACCIDENT_PREFIX))
+                or "страховые взносы" in purpose
+                or "пенсионн" in purpose
+        ):
+            category = OperationCategory.INSURANCE_CONTRIBUTION
+
+        # 3. Комиссии за выплату ЗП (ВК)
+        elif is_bank_recipient and any(kw in purpose for kw in ["функций агента вк", "вфавк"]):
+            category = OperationCategory.SALARY_COMMISSION
+
+        # 4. Прочие комиссии и платы банка
+        elif is_bank_recipient and any(kw in purpose for kw in ["плата за", "комиссия"]):
             category = OperationCategory.COMMISSION
 
-        # 2. Оплата по карте
+        # 5. Оплата по карте
         elif "оплаты по карте" in purpose:
             category = OperationCategory.CARD_PAYMENT
             merchant = self._extract_merchant(purpose_raw)
 
-        # 3. Операции с депозитом "Овернайт"
+        # 6. Операции с депозитом "Овернайт"
         elif "овернайт" in purpose:
             if "возврат процентов" in purpose:
                 category = OperationCategory.OVERNIGHT_INCOME
@@ -103,15 +134,19 @@ class TBankAPI:
             else:
                 category = OperationCategory.INTERNAL_TRANSFER
 
-        # 4. Поступления от контрагентов
+        # 7. Выплата ЗП физлицам
+        elif is_salary:
+            category = OperationCategory.SALARY
+
+        # 8. Поступления от контрагентов
         elif direction == "IN" and raw["operationType"] == "01":
             category = OperationCategory.INCOME
 
-        # 5. Расходы — внешние переводы третьим лицам
+        # 9. Расходы — внешние переводы третьим лицам
         elif direction == "OUT" and raw["operationType"] == "01":
             category = OperationCategory.EXPENSE
 
-        # 6. Прочие внутренние переводы
+        # 10. Прочие внутренние переводы
         elif direction == "INTERNAL":
             category = OperationCategory.INTERNAL_TRANSFER
 
