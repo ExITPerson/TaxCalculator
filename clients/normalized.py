@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
@@ -12,16 +12,20 @@ class OperationCategory(str, Enum):
     COMMISSION = "Комиссия банка"
     SALARY_COMMISSION = "Комиссия за выплату ЗП"
     CARD_PAYMENT = "Оплата по карте"
+    CARD_TRANSFER = "Перевод с карты"
+    CASH_WITHDRAWAL = "Снятие наличных"
     SALARY = "Выплата ЗП"
     OVERNIGHT_DEPOSIT = "Перевод на депозит"
     OVERNIGHT_RETURN = "Возврат с депозита"
     OVERNIGHT_INCOME = "Доход от депозита"
     INTERNAL_TRANSFER = "Внутренний перевод"
+    COURT_BAILIFF = "Взыскание ФССП"
     UNKNOWN = "Не классифицировано"
+
 
 @dataclass
 class Counterparty:
-    """Реквизиты контрагента по операции."""
+    """Реквизиты контрагента по операции """
     name: str = ""
     inn: str = ""
     kpp: str = ""
@@ -29,6 +33,7 @@ class Counterparty:
     corr_account: str = ""
     bic: str = ""
     bank: str = ""
+
 
 @dataclass
 class NormalizedOperation:
@@ -41,5 +46,3 @@ class NormalizedOperation:
     counterparty: Counterparty
     description: str
     merchant: str | None = None
-    raw: dict = field(default_factory=dict, repr=False)
-

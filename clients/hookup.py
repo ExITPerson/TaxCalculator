@@ -1,37 +1,128 @@
+import logging
+import re
+import time
 from datetime import datetime
-from typing import List, Dict
+from typing import Iterator
 
 import requests
-import re
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from clients.normalized import Counterparty, NormalizedOperation, OperationCategory
-from config.settings import BUSINESS_TOKEN, BUSINESS_URL, PAYLOAD, MY_INN, BANK_INN, KBK_PENSION_PREFIX, \
-    KBK_SOCIAL_PREFIX, KBK_ACCIDENT_PREFIX, TAX_AUTHORITY_INN, SOCIAL_FUND_INN
-import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+from config.settings import (
+    BUSINESS_TOKEN, BUSINESS_URL, build_payload, MY_INN, BANK_INN,
+    KBK_TAX_PREFIX, KBK_PENSION_PREFIX, KBK_SOCIAL_PREFIX, KBK_ACCIDENT_PREFIX,
+    TAX_AUTHORITY_INN, SOCIAL_FUND_INN, OPERATION_TYPE_PAYMENT,
+    API_TIMEOUT, API_RETRIES, CA_BUNDLE, OPERATION_TYPE_CARD,
+)
+
+logger = logging.getLogger(__name__)
 
 
-class TBankAPI:
+SALARY_KEYWORDS = ("аванс", "зарплат", "зп ", "заработн", "оклад", "за вычетом")
+SALARY_COMMISSION_KEYWORDS = ("функций агента вк", "вфавк")
+BANK_COMMISSION_KEYWORDS = ("плата за", "комиссия")
 
-    def __init__(self):
-        self.__token = BUSINESS_TOKEN
+
+class TBankClient:
+    """ Только HTTP: сессия, ретраи, пагинация """
+
+    def __init__(self) -> None:
         self._headers = {
             'Accept': 'application/json',
-            'Authorization': f'Bearer {self.__token}'
+            'Authorization': f'Bearer {BUSINESS_TOKEN}',
         }
         self.url = BUSINESS_URL
-        self._payload = PAYLOAD
-        self._my_inn = MY_INN
-        self._bank_inn = BANK_INN
+        self._timeout = API_TIMEOUT
 
-    def _connect(self) -> List[Dict]:
-        """ Подключение к API, получение первоначальных данных """
-        response = requests.get(self.url, headers=self._headers, params=self._payload, verify=False)
+        self._session = requests.Session()
+        self._session.headers.update(self._headers)
 
-        if response.status_code != 200:
-            return []
+        retry = Retry(
+            total=API_RETRIES,
+            backoff_factor=1.0,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset(["GET"]),
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=4, pool_maxsize=8)
+        self._session.mount('https://', adapter)
+        self._session.mount('http://', adapter)
 
-        return response.json()['operation']
+    def fetch_operations(self) -> list[dict]:
+        """ Забирает операции """
+        payload = build_payload()
+        all_ops: list[dict] = []
+        page = 0
+
+        while True:
+            page += 1
+            try:
+                response = self._session.get(
+                    self.url,
+                    params=payload,
+                    timeout=self._timeout,
+                    verify=CA_BUNDLE,
+                )
+
+            # if response.status_code == 401:
+            #     logger.error("401 Unauthorized — проверь BUSINESS_TOKEN")
+            #     # break
+            # if response.status_code != 200:
+            #     logger.warning(
+            #         "API вернул %s: %s", response.status_code, response.text[:300]
+            #     )
+            #
+            # data = response.json()
+            # ops = data.get('operation', [])
+            #
+            # return ops
+
+            except requests.RequestException as e:
+                logger.error("Ошибка сети при запросе операций: %s", e)
+                break
+
+            if response.status_code == 401:
+                logger.error("401 Unauthorized — проверь BUSINESS_TOKEN")
+                # break
+            if response.status_code != 200:
+                logger.warning(
+                    "API вернул %s: %s", response.status_code, response.text[:300]
+                )
+                break
+
+            data = response.json()
+            ops = data.get('operation', [])
+            all_ops.extend(ops)
+
+            logger.info("Страница %d: получено %d операций", page, len(ops))
+
+            next_cursor = data.get('nextCursor') or data.get('cursor')
+            if not next_cursor or not ops:
+                break
+
+            payload['cursor'] = next_cursor
+        #мягкая защита от бесконечного цикла
+            time.sleep(0.1)
+
+        return all_ops
+
+    def close(self) -> None:
+        self._session.close()
+
+    def __enter__(self) -> "TBankClient":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+
+class OperationClassifier:
+    """ Класс классификации данных """
+
+    def __init__(self, my_inn: str, bank_inn: str) -> None:
+        self._my_inn = my_inn
+        self._bank_inn = bank_inn
 
     def _extract_merchant(self, purpose: str) -> str | None:
         m = re.search(r"\d{4}\.\.\.\d{4}\s+(.+?)\.\s*Договор", purpose)
@@ -39,22 +130,11 @@ class TBankAPI:
         if m:
             return m.group(1).strip()
 
+        logger.debug("Не удалось извлечь merchant из: %s", purpose[:120])
         return None
 
     def build_counterparty(self, raw: dict, direction: str) -> Counterparty:
-        """
-        Сбор реквизитов контрагента.
-        Для поступлений (IN) — данные плательщика.
-        Для расходов (OUT) — данные получателя.
-        Для внутренних — данные второй стороны.
-        """
-
-        if direction == 'IN':
-            prefix = 'payer'
-
-        else:
-            prefix = 'recipient'
-
+        prefix = 'payer' if direction == 'IN' else 'recipient'
         return Counterparty(
             name=raw.get(f'{prefix}Name', ''),
             inn=raw.get(f'{prefix}Inn', ''),
@@ -62,11 +142,11 @@ class TBankAPI:
             account=raw.get(f'{prefix}Account', ''),
             corr_account=raw.get(f'{prefix}CorrAccount', ''),
             bic=raw.get(f'{prefix}Bic', ''),
-            bank=raw.get(f'{prefix}Bank', '')
+            bank=raw.get(f'{prefix}Bank', ''),
         )
 
-    def classify_operation(self, raw: dict) -> NormalizedOperation:
-        """ Нормализация операций для дальнейшего использования"""
+    def classify(self, raw: dict) -> NormalizedOperation:
+        """ Нормализация операций для дальнейшего использования """
 
         purpose = raw.get('paymentPurpose', '').lower()
         purpose_raw = raw.get('paymentPurpose', '')
@@ -97,8 +177,39 @@ class TBankAPI:
                 and any(kw in purpose for kw in salary_keywords)
         )
 
+        # ============ Овернайт (operationType == "17", внутренние переводы) ============
+        # Идёт ПЕРВЫМ, потому что у овернайта тип 17 и направление INTERNAL,
+        # без этой ветки он уедет в EXPENSE/UNKNOWN.
+        if "овернайт" in purpose:
+            if "возврат процентов" in purpose:
+                category = OperationCategory.OVERNIGHT_INCOME
+            elif "возврат д/с" in purpose or "возврат" in purpose:
+                category = OperationCategory.OVERNIGHT_RETURN
+            elif "перевод на депозит" in purpose:
+                category = OperationCategory.OVERNIGHT_DEPOSIT
+            else:
+                category = OperationCategory.INTERNAL_TRANSFER
+
+        # ============ Операции по карте (operationType == "17") ============
+        # Овернайт уже пойман выше. Здесь — снятие, переводы через МПС,
+        # оплата услуг, эквайринг.
+        elif raw["operationType"] == "17":
+            if "снятие наличных" in purpose or "атм" in purpose:
+                category = OperationCategory.CASH_WITHDRAWAL
+            elif "перевод средств по реквизитам карты" in purpose or "мпс" in purpose:
+                category = OperationCategory.CARD_TRANSFER
+            elif "оплаты по карте" in purpose or "оплата по карте" in purpose:
+                category = OperationCategory.CARD_PAYMENT
+                merchant = self._extract_merchant(purpose_raw)
+            elif "оплата услуг" in purpose or "мобильной связи" in purpose:
+                category = OperationCategory.EXPENSE
+            elif direction == "IN":
+                category = OperationCategory.INCOME
+            else:
+                category = OperationCategory.EXPENSE
+
         # 1. Налоговые платежи (ЕНП и прочие налоги через ФНС)
-        if direction == "OUT" and (is_tax_authority or kbk.startswith("182")):
+        elif direction == "OUT" and (is_tax_authority or kbk.startswith("182")):
             category = OperationCategory.TAX_PAYMENT
 
         # 2. Страховые и пенсионные взносы
@@ -123,32 +234,25 @@ class TBankAPI:
             category = OperationCategory.CARD_PAYMENT
             merchant = self._extract_merchant(purpose_raw)
 
-        # 6. Операции с депозитом "Овернайт"
-        elif "овернайт" in purpose:
-            if "возврат процентов" in purpose:
-                category = OperationCategory.OVERNIGHT_INCOME
-            elif "возврат" in purpose:
-                category = OperationCategory.OVERNIGHT_RETURN
-            elif "перевод на депозит" in purpose:
-                category = OperationCategory.OVERNIGHT_DEPOSIT
-            else:
-                category = OperationCategory.INTERNAL_TRANSFER
-
-        # 7. Выплата ЗП физлицам
+        # 6. Выплата ЗП физлицам
         elif is_salary:
             category = OperationCategory.SALARY
 
-        # 8. Поступления от контрагентов
+        # 7. Поступления от контрагентов
         elif direction == "IN" and raw["operationType"] == "01":
             category = OperationCategory.INCOME
 
-        # 9. Расходы — внешние переводы третьим лицам
+        # 8. Расходы — внешние переводы третьим лицам
         elif direction == "OUT" and raw["operationType"] == "01":
             category = OperationCategory.EXPENSE
 
-        # 10. Прочие внутренние переводы
+        # 9. Прочие внутренние переводы
         elif direction == "INTERNAL":
             category = OperationCategory.INTERNAL_TRANSFER
+
+        # 10. Взыскания ФССП
+        elif raw["operationType"] == "06" and "обращ. взыск" in purpose:
+            category = OperationCategory.COURT_BAILIFF
 
         else:
             category = OperationCategory.UNKNOWN
@@ -164,12 +268,37 @@ class TBankAPI:
             counterparty=counterparty,
             description=purpose_raw,
             merchant=merchant,
-            raw=raw,
         )
 
-    def get_operations(self):
-        data = self._connect()
 
-        operations = [self.classify_operation(op) for op in data]
+class TBankAPI:
+    """Итоговый класс получения из API и классификации """
 
-        return operations
+    def __init__(self) -> None:
+        self._client = TBankClient()
+        self._classifier = OperationClassifier(my_inn=MY_INN, bank_inn=BANK_INN)
+
+    def get_operations(self) -> Iterator[NormalizedOperation]:
+        raw_ops = self._client.fetch_operations()
+        for raw in raw_ops:
+            try:
+                yield self._classifier.classify(raw)
+            except (KeyError, ValueError) as e:
+                logger.warning("Пропущена операция %s: %s", raw.get('operationId'), e)
+
+    def close(self) -> None:
+        self._client.close()
+
+    def __enter__(self) -> "TBankAPI":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def _connect(self) -> list[dict]:
+        """ Для проверок операций """
+        return self._client.fetch_operations()
+
+    def classify_operation(self, raw: dict) -> NormalizedOperation:
+        """ Для проверок классификаций """
+        return self._classifier.classify(raw)
