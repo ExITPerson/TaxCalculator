@@ -19,6 +19,16 @@ SKIP_COUNTERPARTY_CATEGORIES = {
     OperationCategory.COMMISSION,
 }
 
+# Категории, у которых internal нужно показывать как расход
+INTERNAL_TO_EXPENSE = {
+    'Внутренний перевод',
+}
+
+# Категории, у которых internal нужно показывать как приход
+INTERNAL_TO_INCOME = {
+    'Доход от депозита',
+}
+
 
 class CrudDB:
     def __init__(self, session: Session) -> None:
@@ -185,31 +195,65 @@ class CrudDB:
 
         return sorted(result, key=lambda x: x['turnover'], reverse=True)
 
-    def get_sums_by_category_and_counterparty(self, category: str) -> list[dict]:
-        """ Суммы по категориям и контрагентам """
-        rows = (
+    def get_sums_by_counterparty_or_category(self) -> list[dict]:
+        """
+        Суммы по контрагентам, где counterparty_id заполнен.
+        Для операций без контрагента — группировка по категории.
+        Учитывает direction, чтобы вызывающий код мог разложить на доход/расход.
+        """
+        # С контрагентом
+        with_cp = (
             self.__session.query(
-                CounterpartyDB.name.label('name'),
-                CounterpartyDB.inn.label('inn'),
-                func.sum(OperationsDB.amount).label('total'),
-                func.count(OperationsDB.operation_id).label('count'),
+                CounterpartyDB.name.label("name"),
+                CounterpartyDB.inn.label("inn"),
+                OperationsDB.direction.label("direction"),
+                OperationsDB.category.label("category"),
+                func.sum(OperationsDB.amount).label("total"),
             )
             .join(CounterpartyDB, OperationsDB.counterparty_id == CounterpartyDB.id)
-            .filter(OperationsDB.category == category)
-            .group_by(CounterpartyDB.id, CounterpartyDB.name, CounterpartyDB.inn)
-            .order_by(func.sum(OperationsDB.amount).desc())
+            .group_by(
+                CounterpartyDB.id,
+                CounterpartyDB.name,
+                CounterpartyDB.inn,
+                OperationsDB.direction,
+                OperationsDB.category,
+            )
             .all()
         )
 
-        return [
-            {
-                'name': row.name,
-                'inn': row.inn,
+        # Без контрагента — группируем по категории и направлению
+        without_cp = (
+            self.__session.query(
+                OperationsDB.category.label("category"),
+                OperationsDB.direction.label("direction"),
+                func.sum(OperationsDB.amount).label("total"),
+            )
+            .filter(OperationsDB.counterparty_id.is_(None))
+            .group_by(OperationsDB.category, OperationsDB.direction)
+            .all()
+        )
+
+        result = []
+
+        for row in with_cp:
+            result.append({
+                'name': row.name or row.inn or 'Без имени',
+                'inn': row.inn or '',
+                'direction': row.direction,
+                'category': row.category,
                 'total': float(row.total or 0),
-                'count': int(row.count or 0),
-            }
-            for row in rows
-        ]
+            })
+
+        for row in without_cp:
+            result.append({
+                'name': f'— {row.category} (без контрагента)',
+                'inn': '',
+                'direction': row.direction,
+                'category': row.category,
+                'total': float(row.total or 0),
+            })
+
+        return result
 
     def get_sums_by_category(
             self,
@@ -223,7 +267,6 @@ class CrudDB:
         expense = func.coalesce(
             func.sum(case((OperationsDB.direction == 'OUT', OperationsDB.amount), else_=0)), 0
         )
-        # FIX: внутренние переводы (овернайт) не IN и не OUT — учитываем отдельно
         internal = func.coalesce(
             func.sum(case((OperationsDB.direction == 'INTERNAL', OperationsDB.amount), else_=0)), 0
         )
@@ -253,18 +296,36 @@ class CrudDB:
 
         result = []
         for row in rows:
+            category = row.category
             inc = float(row.income or 0)
             exp = float(row.expense or 0)
             int_ = float(row.internal or 0)
+            inc_cnt = int(row.income_count or 0)
+            exp_cnt = int(row.expense_count or 0)
+            int_cnt = int(row.internal_count or 0)
+
+            # FIX: переносим internal в income/expense для «расходных» и «доходных» категорий
+            if category in INTERNAL_TO_EXPENSE and int_:
+                exp += int_
+                exp_cnt += int_cnt
+                int_ = 0.0
+                int_cnt = 0
+
+            if category in INTERNAL_TO_INCOME and int_:
+                inc += int_
+                inc_cnt += int_cnt
+                int_ = 0.0
+                int_cnt = 0
+
             result.append({
-                'category': row.category,
+                'category': category,
                 'income': inc,
                 'expense': exp,
                 'internal': int_,
-                'income_count': int(row.income_count or 0),
-                'expense_count': int(row.expense_count or 0),
-                'internal_count': int(row.internal_count or 0),
-                'total': inc + exp + int_,  #total учитывает всё
+                'income_count': inc_cnt,
+                'expense_count': exp_cnt,
+                'internal_count': int_cnt,
+                'total': inc + exp + int_,
                 'net': inc - exp,
             })
 
