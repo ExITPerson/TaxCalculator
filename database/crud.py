@@ -264,7 +264,7 @@ class CrudDB:
                 'income_count': int(row.income_count or 0),
                 'expense_count': int(row.expense_count or 0),
                 'internal_count': int(row.internal_count or 0),
-                'total': inc + exp + int_,  # FIX: total учитывает всё
+                'total': inc + exp + int_,  #total учитывает всё
                 'net': inc - exp,
             })
 

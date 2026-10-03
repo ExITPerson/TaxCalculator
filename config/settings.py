@@ -49,6 +49,7 @@ OPERATION_TYPE_CARD = "17"
 # Налоговые ставки
 INGURE_RATE = 0.009
 RATE_CB = 0.16
+USN_LIMIT = float(os.getenv('USN_LIMIT', '19999999'))
 
 # HTTP
 API_TIMEOUT = float(os.getenv('API_TIMEOUT', '30'))
