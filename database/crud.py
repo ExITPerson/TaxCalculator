@@ -5,8 +5,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from clients.normalized import NormalizedOperation, OperationCategory
-from database.db import OperationsDB, CounterpartyDB
-
+from database.db import OperationsDB, CounterpartyDB, Role, UserDB, CashWithdrawalDB
 
 SKIP_COUNTERPARTY_CATEGORIES = {
     OperationCategory.INTERNAL_TRANSFER,
@@ -330,3 +329,124 @@ class CrudDB:
             })
 
         return sorted(result, key=lambda x: x['total'], reverse=True)
+
+# database/crud.py
+class UserCrud:
+    def __init__(self, session):
+        self.__session = session
+
+    def get_or_create(self, user_id: int, username: str = '', full_name: str = '') -> UserDB:
+        user = self.__session.query(UserDB).filter_by(user_id=user_id).first()
+        if user:
+            # обновляем «последнее посещение»
+            user.last_seen = datetime.utcnow()
+            if username:
+                user.username = username
+            if full_name:
+                user.full_name = full_name
+        else:
+            user = UserDB(
+                user_id=user_id,
+                username=username,
+                full_name=full_name,
+                role=Role.USER.value,
+            )
+            self.__session.add(user)
+        self.__session.commit()
+        return user
+
+    def get_role(self, user_id: int) -> Role:
+        user = self.__session.query(UserDB).filter_by(user_id=user_id).first()
+        if not user:
+            return Role.USER
+        try:
+            return Role(user.role)
+        except ValueError:
+            return Role.USER
+
+    def set_role(self, user_id: int, role: Role) -> bool:
+        user = self.__session.query(UserDB).filter_by(user_id=user_id).first()
+        if not user:
+            return False
+        user.role = role.value
+        self.__session.commit()
+        return True
+
+    def set_banned(self, user_id: int, banned: bool) -> bool:
+        user = self.__session.query(UserDB).filter_by(user_id=user_id).first()
+        if not user:
+            return False
+        user.is_banned = banned
+        self.__session.commit()
+        return True
+
+    def is_banned(self, user_id: int) -> bool:
+        user = self.__session.query(UserDB).filter_by(user_id=user_id).first()
+        return bool(user and user.is_banned)
+
+    def get_all(self) -> list[UserDB]:
+        return (
+            self.__session.query(UserDB)
+            .order_by(UserDB.last_seen.desc())
+            .all()
+        )
+
+    def get_by_role(self, role: Role) -> list[UserDB]:
+        return (
+            self.__session.query(UserDB)
+            .filter(UserDB.role == role.value)
+            .all()
+        )
+
+    def find(self, query: str) -> list[UserDB]:
+        """Поиск по ID или username."""
+        q = self.__session.query(UserDB)
+        if query.isdigit():
+            q = q.filter(UserDB.user_id == int(query))
+        else:
+            username = query.lstrip('@')
+            q = q.filter(UserDB.username.ilike(f'%{username}%'))
+        return q.all()
+
+    def count_by_role(self) -> dict[str, int]:
+        from sqlalchemy import func
+        rows = (
+            self.__session.query(UserDB.role, func.count(UserDB.user_id))
+            .group_by(UserDB.role)
+            .all()
+        )
+        return {role: count for role, count in rows}
+
+class CashWithdrawalCrud:
+    def __init__(self, session: Session) -> None:
+        self.__session = session
+
+    def add(self, amount: float, created_by: int = 0, comment: str = '') -> CashWithdrawalDB:
+        item = CashWithdrawalDB(
+            amount=amount,
+            created_by=created_by,
+            comment=comment or None,
+        )
+        self.__session.add(item)
+        self.__session.commit()
+        return item
+
+    def get_all(self) -> list[CashWithdrawalDB]:
+        return (
+            self.__session.query(CashWithdrawalDB)
+            .order_by(CashWithdrawalDB.created_at.desc())
+            .all()
+        )
+
+    def total(self) -> float:
+        from sqlalchemy import func
+        result = self.__session.query(func.coalesce(func.sum(CashWithdrawalDB.amount), 0)).scalar()
+        return float(result or 0)
+
+    def delete(self, item_id: int) -> bool:
+        item = self.__session.query(CashWithdrawalDB).get(item_id)
+        if not item:
+            return False
+        self.__session.delete(item)
+        self.__session.commit()
+        return True

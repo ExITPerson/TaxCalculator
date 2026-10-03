@@ -1,11 +1,23 @@
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 
 from sqlalchemy import (
-    create_engine, String, Column, Integer, DATETIME, Numeric, ForeignKey, Index,
+    create_engine, String, Column, Integer, DATETIME, Numeric, ForeignKey, Index, Boolean,
 )
 from sqlalchemy.orm import sessionmaker, DeclarativeBaseNoMeta, relationship
 
+
+class Role(str, Enum):
+    USER = "user"
+    MODERATOR = "moderator"
+    ADMIN = "admin"
+
+ROLE_LEVEL = {
+    Role.USER: 0,
+    Role.MODERATOR: 10,
+    Role.ADMIN: 100,
+}
 
 DB_DIR = Path(__file__).resolve().parent.parent / 'data'
 DB_DIR.mkdir(exist_ok=True)
@@ -57,3 +69,24 @@ class OperationsDB(Base):
 
 # Индекс для группировки
 Index('ix_operations_category_direction', OperationsDB.category, OperationsDB.direction)
+
+class UserDB(Base):
+    __tablename__ = 'users'
+
+    user_id = Column(Integer, primary_key=True)          # telegram user_id
+    username = Column(String, nullable=True)             # @username
+    full_name = Column(String, nullable=True)            # Иван Петров
+    role = Column(String, default=Role.USER.value, index=True)
+    is_banned = Column(Boolean, default=False, index=True)
+    added_at = Column(DATETIME, default=datetime.utcnow)
+    last_seen = Column(DATETIME, default=datetime.utcnow)
+
+class CashWithdrawalDB(Base):
+    """Ручные снятия наличных, введённые админом."""
+    __tablename__ = 'cash_withdrawals'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    amount = Column(Numeric(precision=13, scale=2), nullable=False)
+    comment = Column(String, nullable=True)
+    created_by = Column(Integer, nullable=True)          # telegram user_id админа
+    created_at = Column(DATETIME, default=datetime.utcnow, index=True)

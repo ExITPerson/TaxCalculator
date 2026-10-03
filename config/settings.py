@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import certifi
@@ -55,3 +56,11 @@ USN_LIMIT = float(os.getenv('USN_LIMIT', '19999999'))
 API_TIMEOUT = float(os.getenv('API_TIMEOUT', '30'))
 API_RETRIES = int(os.getenv('API_RETRIES', '3'))
 CA_BUNDLE = certifi.where()
+
+#Telegram
+TELEGRAM_TOKEN = _require('TELEGRAM_TOKEN')
+ADMIN_IDS = {
+    int(x.strip())
+    for x in os.getenv('ADMIN_IDS', '').split(',')
+    if x.strip().isdigit()
+}

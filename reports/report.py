@@ -61,29 +61,30 @@ IGNORE_CATEGORIES = {'Перевод на депозит', 'Возврат с д
 
 
 
-def build_detailed_report(crud: CrudDB) -> dict:
+def build_detailed_report(crud: CrudDB, cash_withdrawn: float = 0.0) -> dict:
     summ_categories = crud.get_sums_by_category()
-    by_cat: dict[str, dict] = {c['category']: c for c in summ_categories}
+    by_cat = {c['category']: c for c in summ_categories}
 
-    def get_income(name: str) -> float:
-        return float(by_cat.get(name, {}).get('income', 0.0))
+    def get_income(name): return float(by_cat.get(name, {}).get('income', 0.0))
+    def get_expense(name): return float(by_cat.get(name, {}).get('expense', 0.0))
+    def get_internal(name): return float(by_cat.get(name, {}).get('internal', 0.0))
 
-    def get_expense(name: str) -> float:
-        return float(by_cat.get(name, {}).get('expense', 0.0))
-
-    # --- База для налога ---
     revenue = get_income('Поступление')
     salary = get_expense('Выплата ЗП')
     revenue_overnight = get_income('Доход от депозита')
 
-    # --- Оплаченное ---
     paid_taxes = get_expense('Налоговые платежи')
     paid_insurance = get_expense('Страховые взносы')
     paid_salary = get_expense('Выплата ЗП')
 
-    # --- Реальные приходы / расходы ---
-    actual_income = sum(get_income(cat) for cat in INCOME_CATEGORIES)
-    actual_expenses = sum(get_expense(cat) for cat in EXPENSE_CATEGORIES)
+    actual_income = sum(get_income(c) for c in INCOME_CATEGORIES)
+    actual_income += sum(get_internal(c) for c in INTERNAL_IN_CATEGORIES)
+
+    actual_expenses = sum(get_expense(c) for c in EXPENSE_CATEGORIES)
+    actual_expenses += sum(get_internal(c) for c in INTERNAL_OUT_CATEGORIES)
+
+    # FIX: снятия наличных — в расходы
+    # actual_expenses += cash_withdrawn
 
     report = Taxes().get_detailed_report(
         revenue=revenue,
@@ -96,6 +97,9 @@ def build_detailed_report(crud: CrudDB) -> dict:
         paid_salary=paid_salary,
         internal_income=revenue_overnight,
     )
+
+    # FIX: добавляем поле в отчёт
+    report['Снятия наличных (вручную)'] = round(cash_withdrawn, 2)
 
     return report
 
