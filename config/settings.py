@@ -23,6 +23,11 @@ BUSINESS_URL = _require('BUSINESS_URL')
 MY_INN = _require('MY_INN')
 BANK_INN = _require('BANK_INN')
 
+INVEST_TOKEN = _require('INVEST_TOKEN')
+INVEST_URL = _require('INVEST_URL')
+ACCOUNT_ID = _require('ACCOUNT_ID')
+URL_PORTFOLIO = _require('URL_PORTFOLIO')
+
 # дефолт сегодня - 30 дней, DATE_FROM в .env
 from datetime import datetime, timedelta
 DATE_FROM = os.getenv('DATE_FROM', (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d'))
@@ -30,6 +35,17 @@ DATE_FROM = os.getenv('DATE_FROM', (datetime.now() - timedelta(days=30)).strftim
 # payload собирается функцией, чтобы не было мутабельного объекта на уровне модуля
 def build_payload() -> dict:
     return {'from': DATE_FROM}
+
+def build_invest_payload(get: str = None) -> dict:
+    if get == 'portfolio':
+        return {
+            'accountId': ACCOUNT_ID,
+            'currency': 'RUB'
+        }
+    return {
+        'accountId': ACCOUNT_ID,
+        'from': f'{DATE_FROM}T12:00:00.968Z'
+        }
 
 
 # ИНН госорганов

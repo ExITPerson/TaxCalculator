@@ -13,7 +13,8 @@ from config.settings import (
     BUSINESS_TOKEN, BUSINESS_URL, build_payload, MY_INN, BANK_INN,
     KBK_TAX_PREFIX, KBK_PENSION_PREFIX, KBK_SOCIAL_PREFIX, KBK_ACCIDENT_PREFIX,
     TAX_AUTHORITY_INN, SOCIAL_FUND_INN, OPERATION_TYPE_PAYMENT,
-    API_TIMEOUT, API_RETRIES, CA_BUNDLE, OPERATION_TYPE_CARD,
+    API_TIMEOUT, API_RETRIES, CA_BUNDLE, OPERATION_TYPE_CARD, INVEST_TOKEN, INVEST_URL, build_invest_payload,
+    URL_PORTFOLIO,
 )
 
 logger = logging.getLogger(__name__)
@@ -302,3 +303,158 @@ class TBankAPI:
     def classify_operation(self, raw: dict) -> NormalizedOperation:
         """ Для проверок классификаций """
         return self._classifier.classify(raw)
+
+#----------------------------------------------------------------------------------------------------------
+#                                             ИНВЕСТИЦИИИ
+#----------------------------------------------------------------------------------------------------------
+
+class TInvestClient:
+    """ Только HTTP: сессия, ретраи, пагинация"""
+
+    def __init__(self):
+        self._header = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Authorization': f'Bearer {INVEST_TOKEN}'
+        }
+        self._url = INVEST_URL
+        self._session = requests.Session()
+        self._session.headers.update(self._header)
+        self._timeout = API_TIMEOUT
+        retry = Retry(
+            total=API_RETRIES,
+            backoff_factor=1.0,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset(["POST"]),
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=4, pool_maxsize=8)
+        self._session.mount('https://', adapter)
+        self._session.mount('http://', adapter)
+
+    def fetch_operations(self) -> list[dict]:
+        """ Забирает операции """
+        payload = build_invest_payload()
+
+        try:
+            response = self._session.post(
+                self._url,
+                json=payload,
+                timeout=self._timeout,
+                verify=CA_BUNDLE,
+            )
+        except requests.RequestException as e:
+            logger.error("Ошибка сети при запросе операций: %s", e)
+            return []
+
+        # Логируем статус
+        if response.status_code == 401:
+            logger.error("401 Unauthorized — проверь INVEST_TOKEN")
+            return []
+        if response.status_code != 200:
+            logger.warning(
+                "API вернул %s: %s", response.status_code, response.text[:300]
+            )
+            return []
+
+        # Защита от пустого/не-JSON тела
+        if not response.text.strip():
+            logger.warning("Пустой ответ от API")
+            return []
+
+        try:
+            data = response.json().get('operations')
+        except requests.exceptions.JSONDecodeError as e:
+            logger.error("Не удалось распарсить JSON: %s\nОтвет: %s", e, response.text[:500])
+            return []
+
+        return data
+
+    def close(self) -> None:
+        self._session.close()
+
+    def __enter__(self) -> "TInvestClient":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+
+class TInvestPortfolio:
+    """ Получение информации о портфеле """
+
+    def __init__(self):
+        self._header = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Authorization': f'Bearer {INVEST_TOKEN}'
+        }
+        self._url = URL_PORTFOLIO
+        self._session = requests.Session()
+        self._session.headers.update(self._header)
+        self._timeout = API_TIMEOUT
+        retry = Retry(
+            total=API_RETRIES,
+            backoff_factor=1.0,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset(["POST"]),
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=4, pool_maxsize=8)
+        self._session.mount('https://', adapter)
+        self._session.mount('http://', adapter)
+
+    def fetch_portfolio(self) -> list[dict]:
+        payload = build_invest_payload('portfolio')
+
+        try:
+            response = self._session.post(
+                self._url,
+                json=payload,
+                timeout=self._timeout,
+                verify=CA_BUNDLE,
+            )
+        except requests.RequestException as e:
+            logger.error("Ошибка сети при запросе операций: %s", e)
+            return []
+
+        # Логируем статус
+        if response.status_code == 401:
+            logger.error("401 Unauthorized — проверь INVEST_TOKEN")
+            return []
+        if response.status_code != 200:
+            logger.warning(
+                "API вернул %s: %s", response.status_code, response.text[:300]
+            )
+            return []
+
+        # Защита от пустого/не-JSON тела
+        if not response.text.strip():
+            logger.warning("Пустой ответ от API")
+            return []
+
+        try:
+            data = response.json()
+        except requests.exceptions.JSONDecodeError as e:
+            logger.error("Не удалось распарсить JSON: %s\nОтвет: %s", e, response.text[:500])
+            return []
+
+        return data
+
+    def close(self) -> None:
+        self._session.close()
+
+    def __enter__(self) -> "TInvestPortfolio":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+
+class InvestOperationsClassifier:
+    pass
+
+
+class TInvestAPI:
+    pass
+
