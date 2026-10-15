@@ -42,7 +42,7 @@ def track_user(bot_instance, message):
 
 
 # --- Хендлеры (регистрируются на bot при импорте) ---
-from bot.handlers import common, moderator, admin  # noqa: E402, F401
+from bot.handlers import common, moderator, admin, invest  # noqa: E402, F401
 
 
 if __name__ == '__main__':

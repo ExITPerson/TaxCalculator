@@ -1,6 +1,5 @@
 import sys
 
-from clients.hookup import TInvestClient, TInvestPortfolio
 from database.crud import CrudDB
 from database.db import Session
 from reports.interface import print_detailed_report, print_category_turnover, \
@@ -25,15 +24,18 @@ from sync.operations import sync_operations
 #     print_counterparty_turnover(report_counterparty)
 #     print_category_turnover(categories)
 
-# def main():
-#     with Session() as session:
-#         crud = CrudDB(session)
-#         report = build_detailed_report(crud)
-#
-#         return report
-
 def main():
-    # return TInvestClient().fetch_operations()
-    return TInvestPortfolio().fetch_portfolio()
+    with Session() as session:
+        crud = CrudDB(session)
+        report = build_detailed_report(crud)
+
+        return report
+
+# def main():
+#     from invest.date_windows import split_period
+#
+#     windows = split_period('2026-01-01', '2026-03-15')
+#     for f, t in windows:
+#         print(f, '->', t)
 if __name__ == '__main__':
-    print(main())
+    main()

@@ -14,11 +14,19 @@ from config.settings import (
     KBK_TAX_PREFIX, KBK_PENSION_PREFIX, KBK_SOCIAL_PREFIX, KBK_ACCIDENT_PREFIX,
     TAX_AUTHORITY_INN, SOCIAL_FUND_INN, OPERATION_TYPE_PAYMENT,
     API_TIMEOUT, API_RETRIES, CA_BUNDLE, OPERATION_TYPE_CARD, INVEST_TOKEN, INVEST_URL, build_invest_payload,
-    URL_PORTFOLIO,
+    ACCOUNTS_ID,
 )
 
 logger = logging.getLogger(__name__)
 
+# === Счета ИП (для классификации внутренних переводов) ===
+MY_MAIN_ACCOUNT = '40802810800001207791'      # основной расчётный
+MY_SECOND_ACCOUNT = '40802810300002476212'    # второй расчётный
+MY_OVERNIGHT_ACCOUNT = '42109810500000018733' # овернайт / депозит
+MY_CARD_ACCOUNT = '40817810600012884110'      # личная карта физлица
+
+MY_BIZ_ACCOUNTS = {MY_MAIN_ACCOUNT, MY_SECOND_ACCOUNT, MY_OVERNIGHT_ACCOUNT}
+MY_ALL_ACCOUNTS = MY_BIZ_ACCOUNTS | {MY_CARD_ACCOUNT}
 
 SALARY_KEYWORDS = ("аванс", "зарплат", "зп ", "заработн", "оклад", "за вычетом")
 SALARY_COMMISSION_KEYWORDS = ("функций агента вк", "вфавк")
@@ -51,7 +59,6 @@ class TBankClient:
         self._session.mount('http://', adapter)
 
     def fetch_operations(self) -> list[dict]:
-        """ Забирает операции """
         payload = build_payload()
         all_ops: list[dict] = []
         page = 0
@@ -65,27 +72,12 @@ class TBankClient:
                     timeout=self._timeout,
                     verify=CA_BUNDLE,
                 )
-
-            # if response.status_code == 401:
-            #     logger.error("401 Unauthorized — проверь BUSINESS_TOKEN")
-            #     # break
-            # if response.status_code != 200:
-            #     logger.warning(
-            #         "API вернул %s: %s", response.status_code, response.text[:300]
-            #     )
-            #
-            # data = response.json()
-            # ops = data.get('operation', [])
-            #
-            # return ops
-
             except requests.RequestException as e:
                 logger.error("Ошибка сети при запросе операций: %s", e)
                 break
 
             if response.status_code == 401:
                 logger.error("401 Unauthorized — проверь BUSINESS_TOKEN")
-                # break
             if response.status_code != 200:
                 logger.warning(
                     "API вернул %s: %s", response.status_code, response.text[:300]
@@ -103,8 +95,7 @@ class TBankClient:
                 break
 
             payload['cursor'] = next_cursor
-        #мягкая защита от бесконечного цикла
-            time.sleep(0.1)
+            time.sleep(0.05)
 
         return all_ops
 
@@ -127,10 +118,8 @@ class OperationClassifier:
 
     def _extract_merchant(self, purpose: str) -> str | None:
         m = re.search(r"\d{4}\.\.\.\d{4}\s+(.+?)\.\s*Договор", purpose)
-
         if m:
             return m.group(1).strip()
-
         logger.debug("Не удалось извлечь merchant из: %s", purpose[:120])
         return None
 
@@ -147,10 +136,10 @@ class OperationClassifier:
         )
 
     def classify(self, raw: dict) -> NormalizedOperation:
-        """ Нормализация операций для дальнейшего использования """
-
         purpose = raw.get('paymentPurpose', '').lower()
         purpose_raw = raw.get('paymentPurpose', '')
+        payer_acc = raw.get('payerAccount', '')
+        recip_acc = raw.get('recipientAccount', '')
         is_self_payer = raw['payerInn'] == self._my_inn
         is_self_recipient = raw['recipientInn'] == self._my_inn
         is_bank_recipient = raw['recipientInn'] == self._bank_inn
@@ -166,11 +155,9 @@ class OperationClassifier:
         merchant = None
         kbk = raw.get('kbk', '')
 
-        # Проверка на госорганы
         is_tax_authority = raw['recipientInn'] == TAX_AUTHORITY_INN
         is_social_fund = raw['recipientInn'] == SOCIAL_FUND_INN
 
-        # Ключевые слова для выплаты ЗП
         salary_keywords = ["аванс", "зарплат", "зп ", "заработн", "оклад", "за вычетом"]
         is_salary = (
                 direction == "OUT"
@@ -178,9 +165,7 @@ class OperationClassifier:
                 and any(kw in purpose for kw in salary_keywords)
         )
 
-        # ============ Овернайт (operationType == "17", внутренние переводы) ============
-        # Идёт ПЕРВЫМ, потому что у овернайта тип 17 и направление INTERNAL,
-        # без этой ветки он уедет в EXPENSE/UNKNOWN.
+        # ============ Овернайт ============
         if "овернайт" in purpose:
             if "возврат процентов" in purpose:
                 category = OperationCategory.OVERNIGHT_INCOME
@@ -191,9 +176,33 @@ class OperationClassifier:
             else:
                 category = OperationCategory.INTERNAL_TRANSFER
 
+        # ============ Перевод собственных средств ============
+        # Различаем: приход с карты / расход на карту / внутренний / расход на сторонний
+        elif "перевод собственных средств" in purpose or "на свои нужды" in purpose:
+            # Приход с личной карты на расчётный → в остаток
+            if payer_acc == MY_CARD_ACCOUNT and recip_acc in MY_BIZ_ACCOUNTS:
+                category = OperationCategory.CARD_DEPOSIT
+
+            # Расход с бизнес-счёта на личную карту → расход
+            elif payer_acc in MY_BIZ_ACCOUNTS and recip_acc == MY_CARD_ACCOUNT:
+                category = OperationCategory.OWN_FUNDS_TRANSFER
+
+            # Перевод между своими бизнес-счетами → игнор
+            elif payer_acc in MY_BIZ_ACCOUNTS and recip_acc in MY_BIZ_ACCOUNTS:
+                category = OperationCategory.INTERNAL_TRANSFER
+
+            # Расход на сторонний счёт → расход
+            elif payer_acc in MY_BIZ_ACCOUNTS and recip_acc and recip_acc not in MY_ALL_ACCOUNTS:
+                category = OperationCategory.OWN_FUNDS_TRANSFER
+
+            else:
+                category = OperationCategory.INTERNAL_TRANSFER
+
+        # ============ Перевод с карты ============
+        elif "перевод с карты" in purpose:
+            category = OperationCategory.CARD_DEPOSIT
+
         # ============ Операции по карте (operationType == "17") ============
-        # Овернайт уже пойман выше. Здесь — снятие, переводы через МПС,
-        # оплата услуг, эквайринг.
         elif raw["operationType"] == "17":
             if "снятие наличных" in purpose or "атм" in purpose:
                 category = OperationCategory.CASH_WITHDRAWAL
@@ -204,16 +213,24 @@ class OperationClassifier:
                 merchant = self._extract_merchant(purpose_raw)
             elif "оплата услуг" in purpose or "мобильной связи" in purpose:
                 category = OperationCategory.EXPENSE
+            # Комиссии банка (вывод, перевод, обслуживание, SMS, ВФАВК)
+            elif any(kw in purpose for kw in
+                     ["функций агента вк", "вфавк"]):
+                category = OperationCategory.SALARY_COMMISSION
+            elif any(kw in purpose for kw in
+                     ["комиссия", "плата за", "sms-банк", "обслуживание счета",
+                      "оповещение"]):
+                category = OperationCategory.COMMISSION
             elif direction == "IN":
                 category = OperationCategory.INCOME
             else:
                 category = OperationCategory.EXPENSE
 
-        # 1. Налоговые платежи (ЕНП и прочие налоги через ФНС)
+        # 1. Налоговые платежи
         elif direction == "OUT" and (is_tax_authority or kbk.startswith("182")):
             category = OperationCategory.TAX_PAYMENT
 
-        # 2. Страховые и пенсионные взносы
+        # 2. Страховые взносы
         elif direction == "OUT" and (
                 is_social_fund
                 or kbk.startswith((KBK_PENSION_PREFIX, KBK_SOCIAL_PREFIX, KBK_ACCIDENT_PREFIX))
@@ -226,16 +243,16 @@ class OperationClassifier:
         elif is_bank_recipient and any(kw in purpose for kw in ["функций агента вк", "вфавк"]):
             category = OperationCategory.SALARY_COMMISSION
 
-        # 4. Прочие комиссии и платы банка
+        # 4. Прочие комиссии банка
         elif is_bank_recipient and any(kw in purpose for kw in ["плата за", "комиссия"]):
             category = OperationCategory.COMMISSION
 
-        # 5. Оплата по карте
+        # 5. Оплата по карте (без operationType=17)
         elif "оплаты по карте" in purpose:
             category = OperationCategory.CARD_PAYMENT
             merchant = self._extract_merchant(purpose_raw)
 
-        # 6. Выплата ЗП физлицам
+        # 6. Выплата ЗП
         elif is_salary:
             category = OperationCategory.SALARY
 
@@ -297,164 +314,7 @@ class TBankAPI:
         self.close()
 
     def _connect(self) -> list[dict]:
-        """ Для проверок операций """
         return self._client.fetch_operations()
 
     def classify_operation(self, raw: dict) -> NormalizedOperation:
-        """ Для проверок классификаций """
         return self._classifier.classify(raw)
-
-#----------------------------------------------------------------------------------------------------------
-#                                             ИНВЕСТИЦИИИ
-#----------------------------------------------------------------------------------------------------------
-
-class TInvestClient:
-    """ Только HTTP: сессия, ретраи, пагинация"""
-
-    def __init__(self):
-        self._header = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'Authorization': f'Bearer {INVEST_TOKEN}'
-        }
-        self._url = INVEST_URL
-        self._session = requests.Session()
-        self._session.headers.update(self._header)
-        self._timeout = API_TIMEOUT
-        retry = Retry(
-            total=API_RETRIES,
-            backoff_factor=1.0,
-            status_forcelist=(429, 500, 502, 503, 504),
-            allowed_methods=frozenset(["POST"]),
-            raise_on_status=False,
-        )
-        adapter = HTTPAdapter(max_retries=retry, pool_connections=4, pool_maxsize=8)
-        self._session.mount('https://', adapter)
-        self._session.mount('http://', adapter)
-
-    def fetch_operations(self) -> list[dict]:
-        """ Забирает операции """
-        payload = build_invest_payload()
-
-        try:
-            response = self._session.post(
-                self._url,
-                json=payload,
-                timeout=self._timeout,
-                verify=CA_BUNDLE,
-            )
-        except requests.RequestException as e:
-            logger.error("Ошибка сети при запросе операций: %s", e)
-            return []
-
-        # Логируем статус
-        if response.status_code == 401:
-            logger.error("401 Unauthorized — проверь INVEST_TOKEN")
-            return []
-        if response.status_code != 200:
-            logger.warning(
-                "API вернул %s: %s", response.status_code, response.text[:300]
-            )
-            return []
-
-        # Защита от пустого/не-JSON тела
-        if not response.text.strip():
-            logger.warning("Пустой ответ от API")
-            return []
-
-        try:
-            data = response.json().get('operations')
-        except requests.exceptions.JSONDecodeError as e:
-            logger.error("Не удалось распарсить JSON: %s\nОтвет: %s", e, response.text[:500])
-            return []
-
-        return data
-
-    def close(self) -> None:
-        self._session.close()
-
-    def __enter__(self) -> "TInvestClient":
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self.close()
-
-
-class TInvestPortfolio:
-    """ Получение информации о портфеле """
-
-    def __init__(self):
-        self._header = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'Authorization': f'Bearer {INVEST_TOKEN}'
-        }
-        self._url = URL_PORTFOLIO
-        self._session = requests.Session()
-        self._session.headers.update(self._header)
-        self._timeout = API_TIMEOUT
-        retry = Retry(
-            total=API_RETRIES,
-            backoff_factor=1.0,
-            status_forcelist=(429, 500, 502, 503, 504),
-            allowed_methods=frozenset(["POST"]),
-            raise_on_status=False,
-        )
-        adapter = HTTPAdapter(max_retries=retry, pool_connections=4, pool_maxsize=8)
-        self._session.mount('https://', adapter)
-        self._session.mount('http://', adapter)
-
-    def fetch_portfolio(self) -> list[dict]:
-        payload = build_invest_payload('portfolio')
-
-        try:
-            response = self._session.post(
-                self._url,
-                json=payload,
-                timeout=self._timeout,
-                verify=CA_BUNDLE,
-            )
-        except requests.RequestException as e:
-            logger.error("Ошибка сети при запросе операций: %s", e)
-            return []
-
-        # Логируем статус
-        if response.status_code == 401:
-            logger.error("401 Unauthorized — проверь INVEST_TOKEN")
-            return []
-        if response.status_code != 200:
-            logger.warning(
-                "API вернул %s: %s", response.status_code, response.text[:300]
-            )
-            return []
-
-        # Защита от пустого/не-JSON тела
-        if not response.text.strip():
-            logger.warning("Пустой ответ от API")
-            return []
-
-        try:
-            data = response.json()
-        except requests.exceptions.JSONDecodeError as e:
-            logger.error("Не удалось распарсить JSON: %s\nОтвет: %s", e, response.text[:500])
-            return []
-
-        return data
-
-    def close(self) -> None:
-        self._session.close()
-
-    def __enter__(self) -> "TInvestPortfolio":
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self.close()
-
-
-class InvestOperationsClassifier:
-    pass
-
-
-class TInvestAPI:
-    pass
-

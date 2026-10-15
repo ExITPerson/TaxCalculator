@@ -3,6 +3,7 @@ from pathlib import Path
 
 import certifi
 from dotenv import load_dotenv
+from datetime import datetime, timedelta
 import os
 
 
@@ -25,27 +26,36 @@ BANK_INN = _require('BANK_INN')
 
 INVEST_TOKEN = _require('INVEST_TOKEN')
 INVEST_URL = _require('INVEST_URL')
-ACCOUNT_ID = _require('ACCOUNT_ID')
-URL_PORTFOLIO = _require('URL_PORTFOLIO')
+
+ACCOUNTS_ID = [
+    acc.strip()
+    for acc in os.getenv('ACCOUNTS_ID', '').split(',')
+    if acc.strip()
+]
+INVEST_DATE_FROM = os.getenv(
+    'INVEST_DATE_FROM',
+    (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d'),
+)
 
 # дефолт сегодня - 30 дней, DATE_FROM в .env
-from datetime import datetime, timedelta
 DATE_FROM = os.getenv('DATE_FROM', (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d'))
+
+RISK_FREE_RATE = float(os.getenv('RISK_FREE_RATE', '0.13'))
+
+def build_invest_payload(account_id: str) -> dict:
+
+    payload = {
+        'accountId': account_id,
+        'from': (datetime.utcnow() - timedelta(days=365)).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'to': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+    }
+    if cursor:
+        payload['cursor'] = cursor
+    return payload
 
 # payload собирается функцией, чтобы не было мутабельного объекта на уровне модуля
 def build_payload() -> dict:
     return {'from': DATE_FROM}
-
-def build_invest_payload(get: str = None) -> dict:
-    if get == 'portfolio':
-        return {
-            'accountId': ACCOUNT_ID,
-            'currency': 'RUB'
-        }
-    return {
-        'accountId': ACCOUNT_ID,
-        'from': f'{DATE_FROM}T12:00:00.968Z'
-        }
 
 
 # ИНН госорганов

@@ -18,7 +18,9 @@ class OperationCategory(str, Enum):
     OVERNIGHT_DEPOSIT = "Перевод на депозит"
     OVERNIGHT_RETURN = "Возврат с депозита"
     OVERNIGHT_INCOME = "Доход от депозита"
-    INTERNAL_TRANSFER = "Внутренний перевод"
+    INTERNAL_TRANSFER = "Внутренний перевод"          # на второй расчётный / овернайт (игнор)
+    OWN_FUNDS_TRANSFER = "Перевод собственных средств" # на личную карту / сторонний счёт (расход)
+    CARD_DEPOSIT = "Пополнение с карты"
     COURT_BAILIFF = "Взыскание ФССП"
     UNKNOWN = "Не классифицировано"
 

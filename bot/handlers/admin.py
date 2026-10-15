@@ -4,7 +4,12 @@ from bot.decorator import (
 )
 from bot.keyboard import back_to_menu, users_menu
 from database.db import Session
-from database.crud import UserCrud, CashWithdrawalCrud
+from database.crud import UserCrud, CashWithdrawalCrud, BalanceAdjustmentCrud, CrudDB
+from reports.report import build_detailed_report
+
+
+def _fmt(value: float) -> str:
+    return f"{value:,.2f} ₽".replace(",", " ")
 
 
 # ============ Меню ============
@@ -47,7 +52,6 @@ def cb_user_list(call):
     else:
         lines = []
         for u in users[:30]:
-            # FIX: роль вычисляем через get_user_role — учитывает ADMIN_IDS
             role = get_user_role(u.user_id)
             name = u.full_name or u.username or f"id{u.user_id}"
             icon = {'admin': '👑', 'moderator': '🛡', 'user': '👤'}.get(role.value, '❓')
@@ -71,15 +75,12 @@ def cb_user_list(call):
     bot.answer_callback_query(call.id)
 
 
-# ============ Статистика ============
-
 @bot.callback_query_handler(func=lambda c: c.data == 'user_stats')
 @require_role_cb(Role.ADMIN)
 def cb_user_stats(call):
     with Session() as session:
         users = UserCrud(session).get_all()
 
-    # FIX: считаем по get_user_role, а не по БД
     counts = {'admin': 0, 'moderator': 0, 'user': 0}
     for u in users:
         role = get_user_role(u.user_id)
@@ -107,12 +108,11 @@ def cb_user_stats(call):
     bot.answer_callback_query(call.id)
 
 
-# ============ Команды для админа ============
+# ============ Роли ============
 
 @bot.message_handler(commands=['add_mod'])
 @require_role(Role.ADMIN)
 def cmd_add_mod(message):
-    """ /add_mod <user_id> """
     parts = (message.text or '').split()
     if len(parts) != 2 or not parts[1].isdigit():
         bot.reply_to(message, "Использование: <code>/add_mod 123456789</code>",
@@ -144,7 +144,6 @@ def cmd_add_mod(message):
 @bot.message_handler(commands=['del_mod'])
 @require_role(Role.ADMIN)
 def cmd_del_mod(message):
-    """ /del_mod <user_id> """
     parts = (message.text or '').split()
     if len(parts) != 2 or not parts[1].isdigit():
         bot.reply_to(message, "Использование: <code>/del_mod 123456789</code>",
@@ -165,7 +164,7 @@ def cmd_del_mod(message):
                      parse_mode='HTML')
 
 
-# ============ FSM: назначить модератора через кнопку ============
+# ============ FSM: назначить/снять модератора ============
 
 @bot.callback_query_handler(func=lambda c: c.data == 'user_add_mod')
 @require_role_cb(Role.ADMIN)
@@ -212,8 +211,6 @@ def process_add_mod(message):
             parse_mode='HTML',
         )
 
-
-# ============ FSM: снять модератора ============
 
 @bot.callback_query_handler(func=lambda c: c.data == 'user_del_mod')
 @require_role_cb(Role.ADMIN)
@@ -303,6 +300,9 @@ def process_ban(message):
         parse_mode='HTML',
     )
 
+
+# ============ Снятие наличных (ADMIN) ============
+
 @bot.callback_query_handler(func=lambda c: c.data == 'cash_withdraw')
 @require_role_cb(Role.ADMIN)
 def cb_cash_withdraw(call):
@@ -322,7 +322,6 @@ def cb_cash_withdraw(call):
 def process_cash_withdraw(message):
     text = (message.text or '').strip().replace(',', '.').replace(' ', '')
 
-    # отмена
     if text.lower() in ('отмена', 'cancel', '/cancel'):
         bot.send_message(message.chat.id, "Отменено.")
         return
@@ -353,3 +352,155 @@ def process_cash_withdraw(message):
         f"Всего снятий за всё время: <b>{total:,.2f} ₽</b>",
         parse_mode='HTML',
     )
+
+
+@bot.message_handler(commands=['cash_list'])
+@require_role(Role.ADMIN)
+def cmd_cash_list(message):
+    with Session() as session:
+        items = CashWithdrawalCrud(session).get_all()
+    if not items:
+        bot.reply_to(message, "Снятий пока нет.")
+        return
+    lines = [
+        f"<code>{i.id}</code>  {float(i.amount):,.2f} ₽  "
+        f"{i.created_at.strftime('%d.%m.%Y %H:%M') if i.created_at else '—'}"
+        for i in items[:20]
+    ]
+    bot.reply_to(
+        message,
+        "💸 <b>Снятия наличных</b>\n\n" + "\n".join(lines) +
+        "\n\nУдалить: <code>/cash_del &lt;id&gt;</code>",
+        parse_mode='HTML',
+    )
+
+
+@bot.message_handler(commands=['cash_del'])
+@require_role(Role.ADMIN)
+def cmd_cash_del(message):
+    parts = (message.text or '').split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        bot.reply_to(message, "Использование: <code>/cash_del 5</code>",
+                     parse_mode='HTML')
+        return
+    with Session() as session:
+        ok = CashWithdrawalCrud(session).delete(int(parts[1]))
+    bot.reply_to(message, "✅ Удалено." if ok else "❌ Запись не найдена.")
+
+
+# ============ Корректировка остатка (ADMIN) ============
+
+@bot.callback_query_handler(func=lambda c: c.data == 'balance_adjust')
+@require_role_cb(Role.ADMIN)
+def cb_balance_adjust(call):
+    with Session() as session:
+        adj_total = BalanceAdjustmentCrud(session).total()
+        cash_total = CashWithdrawalCrud(session).total()
+        report = build_detailed_report(
+            CrudDB(session),
+            cash_withdrawn=cash_total,
+            balance_adjustment=adj_total,
+        )
+
+    real = report.get('Реальный остаток на счету', 0)
+
+    msg = bot.edit_message_text(
+        f"⚖️ <b>Корректировка остатка</b>\n\n"
+        f"Сейчас в отчёте: <code>{_fmt(real)}</code>\n"
+        f"Текущая корректировка: <code>{_fmt(adj_total)}</code>\n\n"
+        f"Введи <b>сумму</b> корректировки (число):\n"
+        f"  • <code>+23940</code> — увеличить остаток\n"
+        f"  • <code>-23940</code> — уменьшить остаток\n"
+        f"  • <code>0</code> — добавить нулевую запись\n\n"
+        f"<i>Отмена: «отмена»</i>",
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode='HTML',
+        reply_markup=back_to_menu(),
+    )
+    bot.answer_callback_query(call.id)
+    bot.register_next_step_handler(msg, process_balance_adjust)
+
+
+def process_balance_adjust(message):
+    text = (message.text or '').strip().replace(',', '.').replace(' ', '')
+
+    if text.lower() in ('отмена', 'cancel', '/cancel'):
+        bot.send_message(message.chat.id, "Отменено.")
+        return
+
+    try:
+        amount = float(text)
+    except ValueError:
+        bot.send_message(
+            message.chat.id,
+            "⚠️ Введи число. Попробуй ещё раз или напиши «отмена».",
+        )
+        bot.register_next_step_handler(message, process_balance_adjust)
+        return
+
+    with Session() as session:
+        BalanceAdjustmentCrud(session).add(
+            amount=amount,
+            created_by=message.from_user.id,
+            comment='',
+        )
+        adj_total = BalanceAdjustmentCrud(session).total()
+        cash_total = CashWithdrawalCrud(session).total()
+        report = build_detailed_report(
+            CrudDB(session),
+            cash_withdrawn=cash_total,
+            balance_adjustment=adj_total,
+        )
+
+    real = report.get('Реальный остаток на счету', 0)
+    free = report.get('Свободный остаток (после налогов и взносов)', 0)
+
+    bot.send_message(
+        message.chat.id,
+        f"✅ Корректировка <b>{amount:+,.2f} ₽</b> сохранена.\n\n"
+        f"Общая корректировка: <code>{_fmt(adj_total)}</code>\n"
+        f"Реальный остаток: <code>{_fmt(real)}</code>\n"
+        f"Свободный остаток: <code>{_fmt(free)}</code>\n\n"
+        f"История: /adjust_list",
+        parse_mode='HTML',
+    )
+
+
+@bot.message_handler(commands=['adjust_list'])
+@require_role(Role.ADMIN)
+def cmd_adjust_list(message):
+    with Session() as session:
+        items = BalanceAdjustmentCrud(session).get_all(30)
+        total = BalanceAdjustmentCrud(session).total()
+
+    if not items:
+        bot.reply_to(message, "Корректировок пока нет.")
+        return
+
+    lines = [
+        f"<code>{i.id}</code>  {float(i.amount):+,.2f} ₽  "
+        f"{i.created_at.strftime('%d.%m.%Y %H:%M') if i.created_at else '—'}"
+        for i in items
+    ]
+    bot.reply_to(
+        message,
+        f"⚖️ <b>Корректировки остатка</b>\n\n"
+        + "\n".join(lines)
+        + f"\n\nИТОГО: <b>{total:+,.2f} ₽</b>"
+        + "\n\nУдалить: <code>/adjust_del &lt;id&gt;</code>",
+        parse_mode='HTML',
+    )
+
+
+@bot.message_handler(commands=['adjust_del'])
+@require_role(Role.ADMIN)
+def cmd_adjust_del(message):
+    parts = (message.text or '').split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        bot.reply_to(message, "Использование: <code>/adjust_del 5</code>",
+                     parse_mode='HTML')
+        return
+    with Session() as session:
+        ok = BalanceAdjustmentCrud(session).delete(int(parts[1]))
+    bot.reply_to(message, "✅ Удалено." if ok else "❌ Запись не найдена.")

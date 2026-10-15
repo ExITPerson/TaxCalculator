@@ -7,61 +7,50 @@ KNOWN_INNS = {
     '7727406020':   'ФНС (налоги)',
     '7704270863':   'ФССП (взыскания)',
     '7703363868':   'СФР (взносы)',
-    '771617552180': 'ИП (я сам)',         # твой ИНН — проценты с овернайта
-    # остальные можно не маппить, будет показываться ИНН
+    '771617552180': 'ИП (я сам)',
+    '7724892407':   'ООО «ПСК ГК ГОРОД»',
+    '7727312358':   'ООО «СКБИ ВАРЯГ»',
 }
 
-# Категории, которые уводят деньги со счёта (expense)
+# Категория → какие поля из get_sums_by_category суммировать
+INCOME_CATEGORIES = {
+    'Поступление':          ('income',),
+    'Доход от депозита':    ('internal',),
+    'Пополнение с карты':   ('internal',),
+    'Оплата по карте':      ('income',),
+}
+
 EXPENSE_CATEGORIES = {
-    'Расход',
-    'Снятие наличных',
-    'Перевод с карты',
-    'Оплата по карте',
-    'Выплата ЗП',
-    'Комиссия банка',
-    'Комиссия за выплату ЗП',
-    'Взыскание ФССП',
-    'Налоговые платежи',
-    'Страховые взносы',
-    'Внутренний перевод',       # теперь он в expense
+    'Расход':                        ('expense',),
+    'Выплата ЗП':                    ('expense',),
+    'Налоговые платежи':             ('expense',),
+    'Страховые взносы':              ('expense',),
+    'Взыскание ФССП':                ('expense',),
+    'Снятие наличных':               ('expense',),
+    'Перевод с карты':               ('expense',),
+    'Оплата по карте':               ('expense',),
+    'Перевод собственных средств':   ('expense', 'internal'),
+    'Комиссия банка':                ('expense',),
+    'Комиссия за выплату ЗП':        ('expense',),
 }
 
-# Категории, которые уводят деньги со счёта, но с direction="INTERNAL"
-# (вывод на свою карту — для расчётного счёта это расход)
-INTERNAL_OUT_CATEGORIES = {
+IGNORE_CATEGORIES = {
+    'Перевод на депозит',
+    'Возврат с депозита',
     'Внутренний перевод',
 }
 
-# Категории прихода с direction="IN"
-INCOME_CATEGORIES = {
-    'Поступление',
-    'Оплата по карте',          # возвраты
-    'Доход от депозита',        # теперь он в income
-}
 
-# Категории прихода с direction="INTERNAL"
-INTERNAL_IN_CATEGORIES = {
-    'Доход от депозита',     # проценты по овернайту
-}
-
-# Категории, которые не влияют на остаток (деньги вернутся)
-# — Перевод на депозит и Возврат с депозита игнорируем, т.к. это обороты
-SKIP_CATEGORIES = {
-    'Перевод на депозит',
-    'Возврат с депозита',
-}
-# Категории, которые считаем расходом, даже если direction == "INTERNAL"
-INTERNAL_AS_EXPENSE = {'Внутренний перевод'}
-
-# Категории, которые считаем приходом при direction == "INTERNAL"
-INTERNAL_AS_INCOME = {'Доход от депозита'}
-
-# Полностью игнорируем — это обороты, не влияющие на остаток
-IGNORE_CATEGORIES = {'Перевод на депозит', 'Возврат с депозита'}
-
-
-
-def build_detailed_report(crud: CrudDB, cash_withdrawn: float = 0.0) -> dict:
+def build_detailed_report(
+        crud: CrudDB,
+        cash_withdrawn: float = 0.0,
+        balance_adjustment: float = 0.0,
+) -> dict:
+    """
+    :param cash_withdrawn: ручные снятия наличных — ТОЛЬКО для отчётности,
+                           НЕ влияет на расчёт остатка
+    :param balance_adjustment: ручная корректировка остатка (может быть ±)
+    """
     summ_categories = crud.get_sums_by_category()
     by_cat = {c['category']: c for c in summ_categories}
 
@@ -69,22 +58,36 @@ def build_detailed_report(crud: CrudDB, cash_withdrawn: float = 0.0) -> dict:
     def get_expense(name): return float(by_cat.get(name, {}).get('expense', 0.0))
     def get_internal(name): return float(by_cat.get(name, {}).get('internal', 0.0))
 
+    # Налоговая база (УСН «Доходы» 6%)
     revenue = get_income('Поступление')
     salary = get_expense('Выплата ЗП')
-    revenue_overnight = get_income('Доход от депозита')
+    revenue_overnight = get_internal('Доход от депозита')
 
     paid_taxes = get_expense('Налоговые платежи')
     paid_insurance = get_expense('Страховые взносы')
     paid_salary = get_expense('Выплата ЗП')
 
-    actual_income = sum(get_income(c) for c in INCOME_CATEGORIES)
-    actual_income += sum(get_internal(c) for c in INTERNAL_IN_CATEGORIES)
+    # Реальный остаток
+    actual_income = 0.0
+    actual_expenses = 0.0
 
-    actual_expenses = sum(get_expense(c) for c in EXPENSE_CATEGORIES)
-    actual_expenses += sum(get_internal(c) for c in INTERNAL_OUT_CATEGORIES)
+    for c in summ_categories:
+        cat = c['category']
+        if cat in IGNORE_CATEGORIES:
+            continue
 
-    # FIX: снятия наличных — в расходы
-    # actual_expenses += cash_withdrawn
+        if cat in INCOME_CATEGORIES:
+            for field in INCOME_CATEGORIES[cat]:
+                actual_income += c[field]
+
+        if cat in EXPENSE_CATEGORIES:
+            for field in EXPENSE_CATEGORIES[cat]:
+                actual_expenses += c[field]
+
+    # ВАЖНО: cash_withdrawn — это НЕ расход из API, а ручная отчётная цифра.
+    # Она уже включена в 'Снятие наличных' из API (если такие операции там есть).
+    # Отдельная ручная запись идёт только в отчётное поле, остаток не трогает.
+    real_balance = actual_income - actual_expenses + balance_adjustment
 
     report = Taxes().get_detailed_report(
         revenue=revenue,
@@ -98,10 +101,23 @@ def build_detailed_report(crud: CrudDB, cash_withdrawn: float = 0.0) -> dict:
         internal_income=revenue_overnight,
     )
 
-    # FIX: добавляем поле в отчёт
+    # Подменяем реальный остаток с учётом корректировки
+    report['Реальный остаток на счету'] = round(real_balance, 2)
+
+    # Пересчитываем свободный остаток от скорректированного
+    tax_net = report.get('Налог к оплате (с вычетом оплаченных)', 0)
+    ins_net = report.get('Взносы всего (с вычетом оплаченных)', 0)
+    ndfl = report.get('Налог за сотрудников', 0)
+    report['Свободный остаток (после налогов и взносов)'] = round(
+        real_balance - tax_net - ins_net - ndfl, 2
+    )
+
+    # Отчётные поля — НЕ влияют на остаток
     report['Снятия наличных (вручную)'] = round(cash_withdrawn, 2)
+    report['Корректировка остатка'] = round(balance_adjustment, 2)
 
     return report
+
 
 def counterparty_detailed_report(crud: CrudDB) -> list[dict]:
     rows = crud.get_sums_by_counterparty_or_category()
@@ -115,7 +131,6 @@ def counterparty_detailed_report(crud: CrudDB) -> list[dict]:
 
         name, inn = r['name'], r['inn']
 
-        # FIX: все «без контрагента» объединяем под одним ключом
         if name.startswith('— '):
             key = ('Прочие (без контрагента)', '')
             display_name = 'Прочие (без контрагента)'
@@ -135,9 +150,9 @@ def counterparty_detailed_report(crud: CrudDB) -> list[dict]:
         elif direction == 'OUT':
             agg[key]['expense'] += total
         elif direction == 'INTERNAL':
-            if category in INTERNAL_AS_EXPENSE:
+            if category == 'Перевод собственных средств':
                 agg[key]['expense'] += total
-            elif category in INTERNAL_AS_INCOME:
+            elif category == 'Доход от депозита':
                 agg[key]['income'] += total
             else:
                 agg[key]['internal'] += total

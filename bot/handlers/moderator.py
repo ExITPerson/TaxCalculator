@@ -2,7 +2,7 @@ from bot.instance import bot
 from bot.decorator import require_role_cb, Role
 from bot.keyboard import back_to_menu
 from database.db import Session
-from database.crud import CrudDB, CashWithdrawalCrud
+from database.crud import CrudDB, CashWithdrawalCrud, BalanceAdjustmentCrud
 from reports.report import build_detailed_report
 from sync.operations import sync_operations
 
@@ -15,7 +15,6 @@ def _fmt(value: float) -> str:
 
 
 def _build_report_text(report: dict) -> str:
-    """Формирует HTML-текст финансового отчёта."""
     income = report.get('Поступления (выручка)', 0)
     balance_real = report.get('Реальный остаток на счету', 0)
     balance_free = report.get('Свободный остаток (после налогов и взносов)', 0)
@@ -53,7 +52,7 @@ def _build_report_text(report: dict) -> str:
     )
 
 
-# ---------- хендлеры ----------
+# ---------- отчёт ----------
 
 @bot.callback_query_handler(func=lambda c: c.data == 'menu_report')
 @require_role_cb(Role.MODERATOR)
@@ -68,7 +67,12 @@ def cb_report(call):
 
     with Session() as session:
         cash_total = CashWithdrawalCrud(session).total()
-        report = build_detailed_report(CrudDB(session), cash_withdrawn=cash_total)
+        adj_total = BalanceAdjustmentCrud(session).total()
+        report = build_detailed_report(
+            CrudDB(session),
+            cash_withdrawn=cash_total,
+            balance_adjustment=adj_total,
+        )
 
     text = _build_report_text(report)
 
@@ -90,15 +94,24 @@ def cb_report(call):
 def cb_balance(call):
     with Session() as session:
         cash_total = CashWithdrawalCrud(session).total()
-        report = build_detailed_report(CrudDB(session), cash_withdrawn=cash_total)
+        adj_total = BalanceAdjustmentCrud(session).total()
+        report = build_detailed_report(
+            CrudDB(session),
+            cash_withdrawn=cash_total,
+            balance_adjustment=adj_total,
+        )
 
     balance_real = report.get('Реальный остаток на счету', 0)
     balance_free = report.get('Свободный остаток (после налогов и взносов)', 0)
 
-    bot.edit_message_text(
+    text = (
         f"💰 <b>Остатки</b>\n\n"
         f"Реальный: <code>{_fmt(balance_real)}</code>\n"
-        f"Свободный: <code>{_fmt(balance_free)}</code>",
+        f"Свободный: <code>{_fmt(balance_free)}</code>"
+    )
+
+    bot.edit_message_text(
+        text,
         call.message.chat.id,
         call.message.message_id,
         parse_mode='HTML',
@@ -112,7 +125,12 @@ def cb_balance(call):
 def cb_limit(call):
     with Session() as session:
         cash_total = CashWithdrawalCrud(session).total()
-        report = build_detailed_report(CrudDB(session), cash_withdrawn=cash_total)
+        adj_total = BalanceAdjustmentCrud(session).total()
+        report = build_detailed_report(
+            CrudDB(session),
+            cash_withdrawn=cash_total,
+            balance_adjustment=adj_total,
+        )
 
     limit_left = report.get('Остаток до лимита УСН', 0)
     limit_total = report.get('Лимит УСН', 0)
