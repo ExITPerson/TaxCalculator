@@ -4,6 +4,8 @@ from collections import defaultdict
 from pathlib import Path
 
 import matplotlib
+from sqlalchemy import func
+
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
@@ -127,11 +129,13 @@ def build_portfolio_pie_chart(output_path: str | None = None,
 # ============================================================
 
 def _get_monthly_income(session, account_id: str | None = None) -> dict:
-    from sqlalchemy import func
+    from database.db import month_expr
+
+    month = month_expr(InvestOperationDB.date)
 
     q = (
         session.query(
-            func.strftime('%Y-%m', InvestOperationDB.date).label('month'),
+            month.label('month'),
             InvestOperationDB.kind,
             func.coalesce(func.sum(InvestOperationDB.payment_amount), 0),
         )
@@ -143,19 +147,16 @@ def _get_monthly_income(session, account_id: str | None = None) -> dict:
         q = q.filter(InvestOperationDB.account_id == account_id)
 
     rows = (
-        q.group_by(
-            func.strftime('%Y-%m', InvestOperationDB.date),
-            InvestOperationDB.kind,
-        )
-        .order_by(func.strftime('%Y-%m', InvestOperationDB.date))
+        q.group_by(month, InvestOperationDB.kind)
+        .order_by(month)
         .all()
     )
 
     result: dict = defaultdict(lambda: defaultdict(float))
-    for month, kind, total in rows:
-        if not month:
+    for month_val, kind, total in rows:
+        if not month_val:
             continue
-        result[month][kind] = float(total or 0)
+        result[month_val][kind] = float(total or 0)
     return result
 
 

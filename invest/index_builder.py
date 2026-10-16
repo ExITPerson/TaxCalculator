@@ -72,21 +72,14 @@ def build_positions_timeline(session, date_from: date, date_to: date,
 # ============================================================
 
 def build_daily_flows(session, date_from: date, date_to: date) -> dict:
-    """
-    {date: deposit − withdraw}.
-
-    Учитываем ТОЛЬКО внешние потоки:
-    - deposit без parent_id — реальное пополнение
-    - withdraw без parent_id — реальный вывод
-
-    Исключаем внутренние переводы:
-    - deposit/withdraw с parent_id — перевод между счетами
-    """
     from sqlalchemy import func, or_
+    from database.db import day_expr
+
+    day = day_expr(InvestOperationDB.date)
 
     rows = (
         session.query(
-            func.date(InvestOperationDB.date).label('day'),
+            day.label('day'),
             func.coalesce(func.sum(InvestOperationDB.payment_amount), 0),
         )
         .filter(
@@ -98,15 +91,18 @@ def build_daily_flows(session, date_from: date, date_to: date) -> dict:
                 InvestOperationDB.parent_id == '',
             ),
         )
-        .group_by(func.date(InvestOperationDB.date))
+        .group_by(day)
         .all()
     )
 
     flows: dict[date, float] = {}
-    for day_str, total in rows:
-        if not day_str:
+    for day_val, total in rows:
+        if not day_val:
             continue
-        d = datetime.fromisoformat(day_str).date()
+        # day_val может быть date (SQLite) или datetime (PG)
+        d = day_val.date() if hasattr(day_val, 'date') else day_val
+        if not isinstance(d, date):
+            d = datetime.fromisoformat(str(day_val)).date()
         flows[d] = float(total or 0)
 
     return flows
@@ -118,30 +114,31 @@ def build_daily_flows(session, date_from: date, date_to: date) -> dict:
 
 def build_daily_cash(session, date_from: date, date_to: date,
                      start_cash: float = 0.0) -> dict:
-    """
-    cash(T) = start_cash + Σ payment_amount всех операций до T.
-    Все операции учитываются — включая внутренние переводы.
-    """
     from sqlalchemy import func
+    from database.db import day_expr
+
+    day = day_expr(InvestOperationDB.date)
 
     rows = (
         session.query(
-            func.date(InvestOperationDB.date).label('day'),
+            day.label('day'),
             func.coalesce(func.sum(InvestOperationDB.payment_amount), 0),
         )
         .filter(
             InvestOperationDB.date >= datetime.combine(date_from, datetime.min.time()),
             InvestOperationDB.date <= datetime.combine(date_to, datetime.max.time()),
         )
-        .group_by(func.date(InvestOperationDB.date))
+        .group_by(day)
         .all()
     )
 
     daily_delta: dict[date, float] = {}
-    for day_str, total in rows:
-        if not day_str:
+    for day_val, total in rows:
+        if not day_val:
             continue
-        d = datetime.fromisoformat(day_str).date()
+        d = day_val.date() if hasattr(day_val, 'date') else day_val
+        if not isinstance(d, date):
+            d = datetime.fromisoformat(str(day_val)).date()
         daily_delta[d] = float(total or 0)
 
     cash: dict[date, float] = {}
@@ -306,15 +303,11 @@ def get_nkd_on_date(nkd_map: dict[date, float], target: date) -> float | None:
 def build_daily_values(timeline, candles, daily_cash, price_factors,
                        date_from: date, date_to: date,
                        nkd_data: dict | None = None):
-    """
-    Считает paper_value, total_value, positions_count по дням.
-
-    paper_value = Σ qty × (price + НКД)
-    total_value = paper_value + cash
-    """
     paper_values: dict[date, float] = {}
     total_values: dict[date, float] = {}
     positions_count: dict[date, int] = {}
+
+    last_valid_paper = 0.0
 
     current = date_from
     while current <= date_to:
@@ -335,7 +328,6 @@ def build_daily_values(timeline, candles, daily_cash, price_factors,
             factor = price_factors.get(figi, 1.0)
             adjusted_price = price * factor
 
-            # НКД
             nkd_per_unit = 0.0
             if nkd_data and figi in nkd_data:
                 nkd_per_unit = get_nkd_on_date(nkd_data[figi], current) or 0.0
@@ -344,6 +336,18 @@ def build_daily_values(timeline, candles, daily_cash, price_factors,
             count += 1
 
         cash = daily_cash.get(current, 0.0)
+
+        # FIX: если в текущий день нет ни одной цены (count=0), но позиции есть,
+        # берём предыдущее значение paper.
+        if count == 0 and current != date_from:
+            paper = last_valid_paper
+            count = positions_count.get(
+                max([d for d in positions_count if d < current], default=current),
+                0,
+            )
+
+        if count > 0:
+            last_valid_paper = paper
 
         paper_values[current] = round(paper, 2)
         total_values[current] = round(paper + cash, 2)
@@ -414,12 +418,10 @@ def calculate_twr_index(total_values: dict, flows: dict, start_date: date,
 # ============================================================
 
 def build_net_invested(session, date_from: date, date_to: date) -> dict:
-    """
-    {date: Σ(deposits − withdraws) с самого начала портфеля до этой даты}.
-
-    Внутренние переводы (_MULTI) исключаются.
-    """
     from sqlalchemy import func, or_
+    from database.db import day_expr
+
+    day = day_expr(InvestOperationDB.date)
 
     # Сумма всех deposit/withdraw ДО date_from
     start_value = (
@@ -443,7 +445,7 @@ def build_net_invested(session, date_from: date, date_to: date) -> dict:
     # Дневные потоки за период
     rows = (
         session.query(
-            func.date(InvestOperationDB.date).label('day'),
+            day.label('day'),
             func.coalesce(func.sum(InvestOperationDB.payment_amount), 0),
         )
         .filter(
@@ -458,15 +460,17 @@ def build_net_invested(session, date_from: date, date_to: date) -> dict:
                 ]),
             ),
         )
-        .group_by(func.date(InvestOperationDB.date))
+        .group_by(day)
         .all()
     )
 
     daily_flows: dict[date, float] = {}
-    for day_str, total in rows:
-        if not day_str:
+    for day_val, total in rows:
+        if not day_val:
             continue
-        d = datetime.fromisoformat(day_str).date()
+        d = day_val.date() if hasattr(day_val, 'date') else day_val
+        if not isinstance(d, date):
+            d = datetime.fromisoformat(str(day_val)).date()
         daily_flows[d] = float(total or 0)
 
     # Накапливаем

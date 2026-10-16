@@ -1,11 +1,19 @@
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+import os
+
+from dotenv import load_dotenv
 
 from sqlalchemy import (
-    create_engine, String, Column, Integer, DATETIME, Numeric, ForeignKey, Index, Boolean, JSON,
+    create_engine, String, Column, Integer, DateTime, Numeric,
+    ForeignKey, Index, Boolean, JSON, Date, func,
 )
 from sqlalchemy.orm import sessionmaker, DeclarativeBaseNoMeta, relationship
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / '.env')
 
 
 class Role(str, Enum):
@@ -13,21 +21,38 @@ class Role(str, Enum):
     MODERATOR = "moderator"
     ADMIN = "admin"
 
+
 ROLE_LEVEL = {
     Role.USER: 0,
     Role.MODERATOR: 10,
     Role.ADMIN: 100,
 }
 
-DB_DIR = Path(__file__).resolve().parent.parent / 'data'
-DB_DIR.mkdir(exist_ok=True)
-DB_PATH = DB_DIR / 'operations.db'
 
-engine = create_engine(
-    f'sqlite:///{DB_PATH}',
-    echo=False,
-    connect_args={'check_same_thread': False},
+# === БД ===
+DATABASE_URL = os.getenv(
+    'DATABASE_URL',
+    f'sqlite:///{BASE_DIR / "data" / "operations.db"}',
 )
+IS_POSTGRES = DATABASE_URL.startswith('postgresql')
+
+if IS_POSTGRES:
+    engine = create_engine(
+        DATABASE_URL,
+        echo=False,
+        pool_size=10,
+        max_overflow=20,
+        pool_pre_ping=True,
+    )
+else:
+    DB_DIR = BASE_DIR / 'data'
+    DB_DIR.mkdir(exist_ok=True)
+    engine = create_engine(
+        DATABASE_URL,
+        echo=False,
+        connect_args={'check_same_thread': False},
+    )
+
 Session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
@@ -39,13 +64,13 @@ class CounterpartyDB(Base):
     __tablename__ = 'counterparty'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    name: str = Column(String)
-    inn: str = Column(String, index=True)
-    kpp: str = Column(String)
-    account: str = Column(String)
-    corr_account: str = Column(String)
-    bic: str = Column(String)
-    bank: str = Column(String)
+    name = Column(String)
+    inn = Column(String, index=True)
+    kpp = Column(String)
+    account = Column(String)
+    corr_account = Column(String)
+    bic = Column(String)
+    bank = Column(String)
 
     operations = relationship("OperationsDB", back_populates="counterparty")
 
@@ -53,13 +78,13 @@ class CounterpartyDB(Base):
 class OperationsDB(Base):
     __tablename__ = 'operations'
 
-    operation_id: str = Column(String, primary_key=True)
-    date: datetime = Column(DATETIME, index=True)
-    amount: float = Column(Numeric(precision=13, scale=2))
-    category: str = Column(String, index=True)
-    direction: str = Column(String)
-    description: str = Column(String)
-    merchant: str | None = Column(String, nullable=True)
+    operation_id = Column(String, primary_key=True)
+    date = Column(DateTime, index=True)
+    amount = Column(Numeric(precision=13, scale=2))
+    category = Column(String, index=True)
+    direction = Column(String)
+    description = Column(String)
+    merchant = Column(String, nullable=True)
 
     counterparty_id = Column(Integer, ForeignKey('counterparty.id'), nullable=True, index=True)
     counterparty = relationship("CounterpartyDB", back_populates="operations")
@@ -76,44 +101,37 @@ class UserDB(Base):
     full_name = Column(String, nullable=True)
     role = Column(String, default=Role.USER.value, index=True)
     is_banned = Column(Boolean, default=False, index=True)
-    added_at = Column(DATETIME, default=datetime.utcnow)
-    last_seen = Column(DATETIME, default=datetime.utcnow)
+    added_at = Column(DateTime, default=datetime.utcnow)
+    last_seen = Column(DateTime, default=datetime.utcnow)
 
 
 class CashWithdrawalDB(Base):
-    """Ручные снятия наличных, введённые админом."""
     __tablename__ = 'cash_withdrawals'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     amount = Column(Numeric(precision=13, scale=2), nullable=False)
     comment = Column(String, nullable=True)
     created_by = Column(Integer, nullable=True)
-    created_at = Column(DATETIME, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
 
 class BalanceAdjustmentDB(Base):
-    """
-    Ручные корректировки остатка.
-    Нужны, чтобы свести расчётный остаток с фактическим в банке.
-    Может быть со знаком: + или −.
-    """
     __tablename__ = 'balance_adjustments'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     amount = Column(Numeric(15, 2), nullable=False)
     comment = Column(String, nullable=True)
     created_by = Column(Integer, nullable=True)
-    created_at = Column(DATETIME, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
 
 class InvestOperationDB(Base):
-    """Операции T-Invest (сделки, купоны, комиссии, пополнения)."""
     __tablename__ = 'invest_operations'
 
     id = Column(String, primary_key=True)
     account_id = Column(String, primary_key=True)
     parent_id = Column(String, nullable=True)
-    date = Column(DATETIME, index=True)
+    date = Column(DateTime, index=True)
     kind = Column(String, index=True)
     raw_type = Column(String)
     operation_type = Column(String)
@@ -135,7 +153,7 @@ Index('ix_invest_ops_figi_kind', InvestOperationDB.figi, InvestOperationDB.kind)
 class PortfolioSnapshotDB(Base):
     __tablename__ = 'portfolio_snapshots'
 
-    date = Column(DATETIME, primary_key=True)
+    date = Column(DateTime, primary_key=True)
     account_id = Column(String, primary_key=True, default='all')
     total_value = Column(Numeric(18, 2), default=0)
     paper_value = Column(Numeric(18, 2), default=0)
@@ -144,7 +162,7 @@ class PortfolioSnapshotDB(Base):
     index_value = Column(Numeric(18, 6), default=100)
     pnl_value = Column(Numeric(18, 2), default=0)
     positions_count = Column(Integer, default=0)
-    calculated_at = Column(DATETIME, default=datetime.utcnow)
+    calculated_at = Column(DateTime, default=datetime.utcnow)
 
 
 Index('ix_snapshots_date', PortfolioSnapshotDB.date)
@@ -154,7 +172,7 @@ class CandleCacheDB(Base):
     __tablename__ = 'candle_cache'
 
     figi = Column(String, primary_key=True)
-    date = Column(DATETIME, primary_key=True)
+    date = Column(DateTime, primary_key=True)
     close_price = Column(Numeric(15, 6), nullable=False)
 
 
@@ -186,7 +204,7 @@ class StockFundamentalsDB(Base):
     anomaly_flags = Column(JSON, nullable=True)
 
     source = Column(String, default='smartlab')
-    updated_at = Column(DATETIME, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
 
 
 Index('ix_stock_fundamentals_ticker_year',
@@ -209,7 +227,7 @@ class BondFundamentalsDB(Base):
     has_covenants = Column(Boolean, default=False)
     has_offer = Column(Boolean, default=False)
     has_guarantor = Column(Boolean, default=False)
-    updated_at = Column(DATETIME, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
 
 
 class FundFundamentalsDB(Base):
@@ -222,25 +240,25 @@ class FundFundamentalsDB(Base):
     tracking_difference = Column(Numeric(10, 4), nullable=True)
     avg_daily_volume = Column(Numeric(18, 2), nullable=True)
     bid_ask_spread = Column(Numeric(10, 4), nullable=True)
-    updated_at = Column(DATETIME, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
 
 
 class PriceFactorDB(Base):
     __tablename__ = 'price_factors'
     figi = Column(String, primary_key=True)
     factor = Column(Numeric(18, 6))
-    calculated_at = Column(DATETIME, default=datetime.utcnow)
+    calculated_at = Column(DateTime, default=datetime.utcnow)
 
 
 class AccruedInterestCacheDB(Base):
     __tablename__ = 'accrued_interest_cache'
 
     figi = Column(String, primary_key=True)
-    date = Column(DATETIME, primary_key=True)
+    date = Column(DateTime, primary_key=True)
     value = Column(Numeric(18, 6), nullable=False)
     nominal = Column(Numeric(18, 2), nullable=True)
     value_percent = Column(Numeric(10, 4), nullable=True)
-    updated_at = Column(DATETIME, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
 
 
 class InstrumentInfoDB(Base):
@@ -259,4 +277,22 @@ class InstrumentInfoDB(Base):
     interest_coverage = Column(Numeric(10, 2), nullable=True)
     ocf_positive = Column(Boolean, nullable=True)
 
-    updated_at = Column(DATETIME, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ============================================================
+# Универсальные SQL-функции для дат (SQLite + PostgreSQL)
+# ============================================================
+
+def month_expr(col):
+    """Год-месяц в формате 'YYYY-MM'."""
+    if IS_POSTGRES:
+        return func.to_char(col, 'YYYY-MM')
+    return func.strftime('%Y-%m', col)
+
+
+def day_expr(col):
+    """День без времени (Date)."""
+    if IS_POSTGRES:
+        return func.date_trunc('day', col).cast(Date)
+    return func.date(col)
