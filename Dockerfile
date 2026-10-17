@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 
-FROM python:3.11-slim AS base
+FROM python:3.12-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -10,7 +10,6 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Системные зависимости (matplotlib, psycopg, lxml)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
@@ -29,18 +28,14 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 # --- Финальный образ ---
 FROM base AS runtime
 
-COPY --from=deps /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=deps /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=deps /usr/local/bin /usr/local/bin
 
-# Код
 COPY . .
 
-# Директории для данных и логов
 RUN mkdir -p /app/data /app/logs
 
-# Непривилегированный пользователь
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 
-# Запуск бота (проверь имя файла — у тебя connect.py)
-CMD ["python", "connect.py"]
+CMD ["python", "main.py"]
