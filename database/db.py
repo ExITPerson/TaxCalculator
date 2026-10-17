@@ -35,35 +35,35 @@ DATABASE_URL = os.getenv(
     f'sqlite:///{BASE_DIR / "data" / "operations.db"}',
 )
 IS_POSTGRES = DATABASE_URL.startswith('postgresql')
-#
-# if IS_POSTGRES:
-#     engine = create_engine(
-#         DATABASE_URL,
-#         echo=False,
-#         pool_size=10,
-#         max_overflow=20,
-#         pool_pre_ping=True,
-#         connect_args={"connect_timeout": 10},
-#     )
-# else:
-#     DB_DIR = BASE_DIR / "data"
-#     DB_DIR.mkdir(exist_ok=True)
-#     engine = create_engine(
-#         DATABASE_URL,
-#         echo=False,
-#         connect_args={"check_same_thread": False, "timeout": 10},
-#     )
 
-url = URL.create(
-    drivername="postgresql+psycopg",  # Обратите внимание на регистр, не должно быть пробелов
-    username="baranovs11",
-    password="mongol222",  # Если в пароле есть специальные символы, URL.create автоматически закодирует их
-    host="cnpg-taxcalculator-rw",  # Используйте полное доменное имя, подтверждённое ранее
-    port=5432,
-    database="taxcal"
-)
+if IS_POSTGRES:
+    engine = create_engine(
+        DATABASE_URL,
+        echo=False,
+        pool_size=10,
+        max_overflow=20,
+        pool_pre_ping=True,
+        connect_args={"connect_timeout": 10},
+    )
+else:
+    DB_DIR = BASE_DIR / "data"
+    DB_DIR.mkdir(exist_ok=True)
+    engine = create_engine(
+        DATABASE_URL,
+        echo=False,
+        connect_args={"check_same_thread": False, "timeout": 10},
+    )
 
-engine = create_engine(url)
+# url = URL.create(
+#     drivername="postgresql+psycopg",  # Обратите внимание на регистр, не должно быть пробелов
+#     username="baranovs11",
+#     password="mongol222",  # Если в пароле есть специальные символы, URL.create автоматически закодирует их
+#     host="cnpg-taxcalculator-rw",  # Используйте полное доменное имя, подтверждённое ранее
+#     port=5432,
+#     database="taxcal"
+# )
+
+# engine = create_engine(url)
 
 Session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
