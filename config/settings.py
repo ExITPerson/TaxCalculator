@@ -80,7 +80,7 @@ USN_LIMIT = float(os.getenv('USN_LIMIT', '19999999'))
 # HTTP
 API_TIMEOUT = float(os.getenv('API_TIMEOUT', '30'))
 API_RETRIES = int(os.getenv('API_RETRIES', '3'))
-CA_BUNDLE = certifi.where()
+CA_BUNDLE = '/config/cert.cer'
 
 #Telegram
 TELEGRAM_TOKEN = _require('TELEGRAM_TOKEN')
