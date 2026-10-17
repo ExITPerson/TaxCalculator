@@ -418,12 +418,13 @@ def calculate_twr_index(total_values: dict, flows: dict, start_date: date,
 # ============================================================
 
 def build_net_invested(session, date_from: date, date_to: date) -> dict:
-    from sqlalchemy import func, or_
+    from sqlalchemy import func
     from database.db import day_expr
 
     day = day_expr(InvestOperationDB.date)
 
-    # Сумма всех deposit/withdraw ДО date_from
+    # 1. Сумма всех deposit/withdraw ДО date_from
+    # УБРАН фильтр по operation_type — учитываем ВСЕ пополнения/выводы
     start_value = (
         session.query(
             func.coalesce(func.sum(InvestOperationDB.payment_amount), 0)
@@ -431,18 +432,12 @@ def build_net_invested(session, date_from: date, date_to: date) -> dict:
         .filter(
             InvestOperationDB.kind.in_(['deposit', 'withdraw']),
             InvestOperationDB.date < datetime.combine(date_from, datetime.min.time()),
-            or_(
-                InvestOperationDB.operation_type.is_(None),
-                InvestOperationDB.operation_type.notin_([
-                    'OPERATION_TYPE_INP_MULTI',
-                    'OPERATION_TYPE_OUT_MULTI',
-                ]),
-            ),
         )
         .scalar()
     ) or 0.0
 
-    # Дневные потоки за период
+    # 2. Дневные потоки за период
+    # УБРАН фильтр по operation_type
     rows = (
         session.query(
             day.label('day'),
@@ -452,13 +447,6 @@ def build_net_invested(session, date_from: date, date_to: date) -> dict:
             InvestOperationDB.kind.in_(['deposit', 'withdraw']),
             InvestOperationDB.date >= datetime.combine(date_from, datetime.min.time()),
             InvestOperationDB.date <= datetime.combine(date_to, datetime.max.time()),
-            or_(
-                InvestOperationDB.operation_type.is_(None),
-                InvestOperationDB.operation_type.notin_([
-                    'OPERATION_TYPE_INP_MULTI',
-                    'OPERATION_TYPE_OUT_MULTI',
-                ]),
-            ),
         )
         .group_by(day)
         .all()
@@ -473,7 +461,7 @@ def build_net_invested(session, date_from: date, date_to: date) -> dict:
             d = datetime.fromisoformat(str(day_val)).date()
         daily_flows[d] = float(total or 0)
 
-    # Накапливаем
+    # 3. Накапливаем
     result: dict[date, float] = {}
     current = date_from
     accumulated = float(start_value)
