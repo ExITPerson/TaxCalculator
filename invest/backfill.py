@@ -1,3 +1,5 @@
+# invest/backfill.py
+
 import logging
 from datetime import date, timedelta
 
@@ -20,6 +22,11 @@ def get_first_operation_date(session) -> date | None:
 def backfill_from_date(target_date: date, account_id: str = 'all') -> dict:
     previous_day = target_date - timedelta(days=1)
     start_positions, start_cash = compute_start_state(previous_day, ACCOUNTS_ID)
+
+    # --- ЗАЩИТА ---
+    if start_positions is None or start_cash is None:
+        logger.error("backfill_from_date: compute_start_state вернул None — пропускаем")
+        return {'added': 0, 'updated': 0, 'skipped': 0, 'error': 'start_state failed'}
 
     with Session() as session:
         crud = SnapshotCrud(session)
@@ -65,7 +72,16 @@ def backfill_incremental(account_id: str = 'all') -> dict:
                 last_date - timedelta(days=1), ACCOUNTS_ID,
             )
 
-            # ЗАЩИТА: если start_state пустой — не трогаем snapshots
+            # --- ЗАЩИТА: если start_state вернул None — не трогаем snapshots ---
+            if start_positions is None or start_cash is None:
+                logger.error(
+                    "compute_start_state вернул None — "
+                    "пропускаем backfill, чтобы не затереть snapshots"
+                )
+                return {'added': 0, 'updated': 0, 'skipped': 0,
+                        'error': 'compute_start_state failed'}
+
+            # Дополнительная защита от пустого состояния (как было)
             if not start_positions and abs(start_cash) < 1e-6:
                 logger.error(
                     "compute_start_state вернул пусто (0 FIGI, cash=0) — "
@@ -93,9 +109,10 @@ def backfill_incremental(account_id: str = 'all') -> dict:
                 first_date - timedelta(days=1), ACCOUNTS_ID,
             )
 
-            # FIX: для первой даты пустое состояние — НОРМАЛЬНО.
-            # Портфель ещё не сформирован, начинаем с 0.
-            # НЕ считаем это ошибкой.
+            if start_positions is None or start_cash is None:
+                logger.error("Первый backfill: compute_start_state вернул None — пропускаем")
+                return {'added': 0, 'updated': 0, 'skipped': 0,
+                        'error': 'compute_start_state failed'}
 
             date_from = first_date
             start_index = 100.0
@@ -146,6 +163,11 @@ def backfill_last_days(days: int = 30, account_id: str = 'all') -> dict:
     start_positions, start_cash = compute_start_state(
         target - timedelta(days=1), ACCOUNTS_ID,
     )
+
+    if start_positions is None or start_cash is None:
+        logger.error("backfill_last_days: compute_start_state вернул None — пропускаем")
+        return {'added': 0, 'updated': 0, 'skipped': 0,
+                'error': 'compute_start_state failed'}
 
     if not start_positions and abs(start_cash) < 1e-6:
         logger.error("compute_start_state вернул пусто — пропускаем")
