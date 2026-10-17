@@ -542,7 +542,32 @@ def build_snapshots_for_period(session, date_from: date, date_to: date,
 
     stats = {'added': 0, 'updated': 0, 'skipped': 0}
 
+    # --- ЗАЩИТА ОТ ПАДЕНИЯ СТОИМОСТИ ---
+    # Получаем предыдущую стоимость из БД (до date_from)
+    prev_total = 0.0
+    existing_snapshots = crud.get_snapshots(account_id)
+    if existing_snapshots:
+        # Берем последний снапшот, который был ДО date_from
+        for s in reversed(existing_snapshots):
+            if s.date.date() < date_from:
+                prev_total = float(s.total_value)
+                break
+
     for d in sorted(total_values.keys()):
+        curr_total = total_values[d]
+        flow = flows.get(d, 0.0)
+
+        # Если капитал внезапно упал более чем на 50%, и это не вывод средств
+        # (вывод был бы flow < 0), то это ошибка API (нет цен).
+        if prev_total > 10000 and curr_total < prev_total * 0.5 and flow >= 0:
+            logger.warning(
+                "ЗАЩИТА: %s стоимость упала с %.2f до %.2f (flow=%.2f). "
+                "Пропускаем запись снапшота, чтобы не сломать график.",
+                d, prev_total, curr_total, flow
+            )
+            stats['skipped'] += 1
+            continue  # Пропускаем запись этого дня
+
         result = crud.upsert_snapshot(d, account_id, {
             'total_value': total_values[d],
             'paper_value': paper_values[d],
@@ -553,5 +578,6 @@ def build_snapshots_for_period(session, date_from: date, date_to: date,
             'positions_count': positions_count.get(d, 0),
         })
         stats[result] += 1
+        prev_total = curr_total  # Обновляем для следующего дня
 
     return stats
