@@ -1,4 +1,4 @@
-from bot.instance import bot
+from bot.instance import bot_tg
 from bot.decorator import require_role_cb, Role, get_user_role, ROLE_LEVEL
 from bot.keyboard import (
     invest_summary_keyboard,
@@ -16,23 +16,23 @@ from reports.invest_report import (
 from reports.index_report import build_index_chart
 
 
-@bot.callback_query_handler(func=lambda c: c.data == 'menu_invest')
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'menu_invest')
 @require_role_cb(Role.ADMIN)
 def cb_invest(call):
-    bot.answer_callback_query(call.id, "🔄 Обновляю портфель...")
+    bot_tg.answer_callback_query(call.id, "🔄 Обновляю портфель...")
 
     try:
         sync_invest_operations()
         report = build_invest_report()
         text = format_invest_summary(report)
     except Exception as e:
-        bot.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
+        bot_tg.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
         return
 
     total = len(report.get('all_positions', []))
 
     try:
-        bot.edit_message_text(
+        bot_tg.edit_message_text(
             text,
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
@@ -44,7 +44,7 @@ def cb_invest(call):
             raise
 
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith('invest_all_'))
+@bot_tg.callback_query_handler(func=lambda c: c.data.startswith('invest_all_'))
 @require_role_cb(Role.ADMIN)
 def cb_invest_all(call):
     try:
@@ -55,7 +55,7 @@ def cb_invest_all(call):
     try:
         all_positions = build_all_positions()
     except Exception as e:
-        bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
+        bot_tg.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
         return
 
     total = len(all_positions)
@@ -65,7 +65,7 @@ def cb_invest_all(call):
     text = format_invest_positions_page(all_positions, page)
 
     try:
-        bot.edit_message_text(
+        bot_tg.edit_message_text(
             text,
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
@@ -76,27 +76,27 @@ def cb_invest_all(call):
         if "not modified" not in str(e).lower():
             raise
 
-    bot.answer_callback_query(call.id)
+    bot_tg.answer_callback_query(call.id)
 
 
-@bot.callback_query_handler(func=lambda c: c.data == 'invest_chart')
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'invest_chart')
 @require_role_cb(Role.ADMIN)
 def cb_invest_chart(call):
     """
     ВАЖНО: НЕ вызываем backfill — график только визуализирует данные.
     Если данные устарели, они обновятся при следующем синке (menu_invest).
     """
-    bot.answer_callback_query(call.id, "📈 Строю график...")
+    bot_tg.answer_callback_query(call.id, "📈 Строю график...")
 
     try:
         path = build_index_chart()
     except Exception as e:
-        bot.send_message(call.message.chat.id, f"⚠️ Ошибка графика: {e}")
+        bot_tg.send_message(call.message.chat.id, f"⚠️ Ошибка графика: {e}")
         return
 
     try:
         with open(path, 'rb') as f:
-            bot.send_photo(
+            bot_tg.send_photo(
                 call.message.chat.id,
                 f,
                 caption="📈 <b>Динамика портфеля</b>\n\n"
@@ -106,25 +106,25 @@ def cb_invest_chart(call):
                 reply_markup=invest_chart_keyboard(),
             )
     except Exception as e:
-        bot.send_message(call.message.chat.id, f"⚠️ Ошибка отправки: {e}")
+        bot_tg.send_message(call.message.chat.id, f"⚠️ Ошибка отправки: {e}")
         return
 
     try:
-        bot.delete_message(call.message.chat.id, call.message.message_id)
+        bot_tg.delete_message(call.message.chat.id, call.message.message_id)
     except Exception:
         pass
 
 
-@bot.callback_query_handler(func=lambda c: c.data == 'noop')
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'noop')
 def cb_noop(call):
-    bot.answer_callback_query(call.id)
+    bot_tg.answer_callback_query(call.id)
 
 
-@bot.message_handler(commands=['invest'])
+@bot_tg.message_handler(commands=['invest'])
 def cmd_invest(message):
     role = get_user_role(message.from_user.id)
     if ROLE_LEVEL[role] < ROLE_LEVEL[Role.MODERATOR]:
-        bot.reply_to(message, "⛔ Недостаточно прав")
+        bot_tg.reply_to(message, "⛔ Недостаточно прав")
         return
 
     try:
@@ -132,11 +132,11 @@ def cmd_invest(message):
         report = build_invest_report()
         text = format_invest_summary(report)
     except Exception as e:
-        bot.reply_to(message, f"⚠️ Ошибка: {e}")
+        bot_tg.reply_to(message, f"⚠️ Ошибка: {e}")
         return
 
     total = len(report.get('all_positions', []))
-    bot.send_message(
+    bot_tg.send_message(
         message.chat.id,
         text,
         parse_mode='HTML',
@@ -144,21 +144,21 @@ def cmd_invest(message):
     )
 
 
-@bot.message_handler(commands=['chart'])
+@bot_tg.message_handler(commands=['chart'])
 def cmd_chart(message):
     role = get_user_role(message.from_user.id)
     if ROLE_LEVEL[role] < ROLE_LEVEL[Role.MODERATOR]:
-        bot.reply_to(message, "⛔ Недостаточно прав")
+        bot_tg.reply_to(message, "⛔ Недостаточно прав")
         return
 
     try:
         path = build_index_chart()
     except Exception as e:
-        bot.reply_to(message, f"⚠️ Ошибка: {e}")
+        bot_tg.reply_to(message, f"⚠️ Ошибка: {e}")
         return
 
     with open(path, 'rb') as f:
-        bot.send_photo(
+        bot_tg.send_photo(
             message.chat.id,
             f,
             caption="📈 Индекс полной доходности (TWR)",
@@ -196,11 +196,11 @@ def _render_metrics(call, benchmark_key: str):
         )
         text = format_metrics(metrics)
     except Exception as e:
-        bot.send_message(call.message.chat.id, f"⚠️ Ошибка метрик: {e}")
+        bot_tg.send_message(call.message.chat.id, f"⚠️ Ошибка метрик: {e}")
         return
 
     try:
-        bot.edit_message_text(
+        bot_tg.edit_message_text(
             text,
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
@@ -212,39 +212,39 @@ def _render_metrics(call, benchmark_key: str):
             raise
 
 
-@bot.callback_query_handler(func=lambda c: c.data == 'invest_metrics')
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'invest_metrics')
 @require_role_cb(Role.ADMIN)
 def cb_invest_metrics(call):
     """Кнопка «📊 Метрики» — открывает с дефолтным бенчмарком (RGBI)."""
-    bot.answer_callback_query(call.id, "📊 Считаю метрики...")
+    bot_tg.answer_callback_query(call.id, "📊 Считаю метрики...")
     _render_metrics(call, 'rgbi')
 
 
-@bot.callback_query_handler(func=lambda c: c.data == 'metrics_vs_rgbi')
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'metrics_vs_rgbi')
 @require_role_cb(Role.ADMIN)
 def cb_metrics_rgbi(call):
-    bot.answer_callback_query(call.id, "📊 Считаю метрики vs RGBI...")
+    bot_tg.answer_callback_query(call.id, "📊 Считаю метрики vs RGBI...")
     _render_metrics(call, 'rgbi')
 
 
-@bot.callback_query_handler(func=lambda c: c.data == 'metrics_vs_imoex')
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'metrics_vs_imoex')
 @require_role_cb(Role.ADMIN)
 def cb_metrics_imoex(call):
-    bot.answer_callback_query(call.id, "📊 Считаю метрики vs IMOEX...")
+    bot_tg.answer_callback_query(call.id, "📊 Считаю метрики vs IMOEX...")
     _render_metrics(call, 'imoex')
 
 
-@bot.callback_query_handler(func=lambda c: c.data == 'metrics_vs_mcftr')
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'metrics_vs_mcftr')
 @require_role_cb(Role.ADMIN)
 def cb_metrics_mcftr(call):
-    bot.answer_callback_query(call.id, "📊 Считаю метрики vs MCFTR...")
+    bot_tg.answer_callback_query(call.id, "📊 Считаю метрики vs MCFTR...")
     _render_metrics(call, 'mcftr')
 
 
-@bot.callback_query_handler(func=lambda c: c.data == 'metrics_vs_rtsi')
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'metrics_vs_rtsi')
 @require_role_cb(Role.ADMIN)
 def cb_metrics_rtsi(call):
-    bot.answer_callback_query(call.id, "📊 Считаю метрики vs RTSI...")
+    bot_tg.answer_callback_query(call.id, "📊 Считаю метрики vs RTSI...")
     _render_metrics(call, 'rtsi')
 
 
@@ -252,21 +252,21 @@ def cb_metrics_rtsi(call):
 # Структура портфеля (pie)
 # ============================================================
 
-@bot.callback_query_handler(func=lambda c: c.data == 'invest_pie')
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'invest_pie')
 @require_role_cb(Role.ADMIN)
 def cb_invest_pie(call):
-    bot.answer_callback_query(call.id, "🥧 Строю диаграмму...")
+    bot_tg.answer_callback_query(call.id, "🥧 Строю диаграмму...")
 
     try:
         from reports.portfolio_charts import build_portfolio_pie_chart
 
         path = build_portfolio_pie_chart()
     except Exception as e:
-        bot.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
+        bot_tg.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
         return
 
     with open(path, 'rb') as f:
-        bot.send_photo(
+        bot_tg.send_photo(
             call.message.chat.id,
             f,
             caption="🥧 <b>Структура портфеля</b>\n"
@@ -279,21 +279,21 @@ def cb_invest_pie(call):
 # Доходы (купоны/дивиденды по месяцам)
 # ============================================================
 
-@bot.callback_query_handler(func=lambda c: c.data == 'invest_income')
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'invest_income')
 @require_role_cb(Role.ADMIN)
 def cb_invest_income(call):
-    bot.answer_callback_query(call.id, "💰 Строю график доходов...")
+    bot_tg.answer_callback_query(call.id, "💰 Строю график доходов...")
 
     try:
         from reports.portfolio_charts import build_income_chart
 
         path = build_income_chart()
     except Exception as e:
-        bot.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
+        bot_tg.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
         return
 
     with open(path, 'rb') as f:
-        bot.send_photo(
+        bot_tg.send_photo(
             call.message.chat.id,
             f,
             caption="💰 <b>Динамика доходов по месяцам</b>\n"
@@ -306,20 +306,20 @@ def cb_invest_income(call):
 # Сектора (pie)
 # ============================================================
 
-@bot.callback_query_handler(func=lambda c: c.data == 'invest_sectors')
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'invest_sectors')
 @require_role_cb(Role.ADMIN)
 def cb_invest_sectors(call):
-    bot.answer_callback_query(call.id, "🏭 Строю распределение по секторам...")
+    bot_tg.answer_callback_query(call.id, "🏭 Строю распределение по секторам...")
 
     try:
         from reports.portfolio_charts import build_sectors_pie_chart
         path = build_sectors_pie_chart()
     except Exception as e:
-        bot.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
+        bot_tg.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
         return
 
     with open(path, 'rb') as f:
-        bot.send_photo(
+        bot_tg.send_photo(
             call.message.chat.id,
             f,
             caption="🏭 <b>Распределение по секторам</b>\n"
@@ -333,20 +333,20 @@ def cb_invest_sectors(call):
 # Атрибуция (pie)
 # ============================================================
 
-@bot.callback_query_handler(func=lambda c: c.data == 'invest_attribution')
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'invest_attribution')
 @require_role_cb(Role.ADMIN)
 def cb_invest_attribution(call):
-    bot.answer_callback_query(call.id, "📉 Считаю атрибуцию...")
+    bot_tg.answer_callback_query(call.id, "📉 Считаю атрибуцию...")
 
     try:
         from reports.portfolio_charts import build_attribution_pie_chart
         path = build_attribution_pie_chart()
     except Exception as e:
-        bot.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
+        bot_tg.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
         return
 
     with open(path, 'rb') as f:
-        bot.send_photo(
+        bot_tg.send_photo(
             call.message.chat.id,
             f,
             caption="📉 <b>Атрибуция доходности</b>\n"
@@ -360,10 +360,10 @@ def cb_invest_attribution(call):
 # Метрики по позициям
 # ============================================================
 
-@bot.callback_query_handler(func=lambda c: c.data == 'invest_positions_metrics')
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'invest_positions_metrics')
 @require_role_cb(Role.ADMIN)
 def cb_invest_positions_metrics(call):
-    bot.answer_callback_query(call.id, "📈 Считаю метрики по позициям...")
+    bot_tg.answer_callback_query(call.id, "📈 Считаю метрики по позициям...")
 
     try:
         from invest.position_metrics import build_position_metrics
@@ -372,11 +372,11 @@ def cb_invest_positions_metrics(call):
         positions = build_position_metrics()
         text = format_position_metrics(positions)
     except Exception as e:
-        bot.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
+        bot_tg.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
         return
 
     try:
-        bot.edit_message_text(
+        bot_tg.edit_message_text(
             text,
             call.message.chat.id,
             call.message.message_id,
@@ -392,10 +392,10 @@ def cb_invest_positions_metrics(call):
 # Ребалансировка
 # ============================================================
 
-@bot.callback_query_handler(func=lambda c: c.data == 'invest_rebalance')
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'invest_rebalance')
 @require_role_cb(Role.ADMIN)
 def cb_invest_rebalance(call):
-    bot.answer_callback_query(call.id, "⚖️ Считаю ребалансировку...")
+    bot_tg.answer_callback_query(call.id, "⚖️ Считаю ребалансировку...")
 
     try:
         from invest.rebalance import build_rebalance_recommendations
@@ -404,11 +404,11 @@ def cb_invest_rebalance(call):
         report = build_rebalance_recommendations()
         text = format_rebalance(report)
     except Exception as e:
-        bot.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
+        bot_tg.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
         return
 
     try:
-        bot.edit_message_text(
+        bot_tg.edit_message_text(
             text,
             call.message.chat.id,
             call.message.message_id,
@@ -424,10 +424,10 @@ def cb_invest_rebalance(call):
 # Целевые ориентиры
 # ============================================================
 
-@bot.callback_query_handler(func=lambda c: c.data == 'invest_goals')
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'invest_goals')
 @require_role_cb(Role.ADMIN)
 def cb_invest_goals(call):
-    bot.answer_callback_query(call.id, "🎯 Считаю прогресс...")
+    bot_tg.answer_callback_query(call.id, "🎯 Считаю прогресс...")
 
     try:
         from invest.goals import build_goals_report
@@ -436,11 +436,11 @@ def cb_invest_goals(call):
         report = build_goals_report()
         text = format_goals(report)
     except Exception as e:
-        bot.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
+        bot_tg.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
         return
 
     try:
-        bot.edit_message_text(
+        bot_tg.edit_message_text(
             text,
             call.message.chat.id,
             call.message.message_id,
@@ -456,10 +456,10 @@ def cb_invest_goals(call):
 # Симуляция «что если»
 # ============================================================
 
-@bot.callback_query_handler(func=lambda c: c.data == 'invest_simulation')
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'invest_simulation')
 @require_role_cb(Role.ADMIN)
 def cb_invest_simulation(call):
-    bot.answer_callback_query(call.id, "🔮 Считаю прогноз...")
+    bot_tg.answer_callback_query(call.id, "🔮 Считаю прогноз...")
 
     try:
         from invest.simulation import build_simulation
@@ -468,11 +468,11 @@ def cb_invest_simulation(call):
         report = build_simulation()
         text = format_simulation(report)
     except Exception as e:
-        bot.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
+        bot_tg.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
         return
 
     try:
-        bot.edit_message_text(
+        bot_tg.edit_message_text(
             text,
             call.message.chat.id,
             call.message.message_id,
@@ -487,10 +487,10 @@ def cb_invest_simulation(call):
 # Rolling Sharpe
 # ============================================================
 
-@bot.callback_query_handler(func=lambda c: c.data == 'invest_rolling_sharpe')
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'invest_rolling_sharpe')
 @require_role_cb(Role.ADMIN)
 def cb_invest_rolling_sharpe(call):
-    bot.answer_callback_query(call.id, "📈 Считаю rolling Sharpe...")
+    bot_tg.answer_callback_query(call.id, "📈 Считаю rolling Sharpe...")
 
     try:
         from invest.rolling_metrics import build_rolling_sharpe_report
@@ -499,12 +499,12 @@ def cb_invest_rolling_sharpe(call):
         report = build_rolling_sharpe_report()
         text = format_rolling_sharpe(report)
     except Exception as e:
-        bot.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
+        bot_tg.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
         return
 
     # Отправляем текст
     try:
-        bot.edit_message_text(
+        bot_tg.edit_message_text(
             text,
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
@@ -516,21 +516,21 @@ def cb_invest_rolling_sharpe(call):
             raise
 
 
-@bot.callback_query_handler(func=lambda c: c.data == 'invest_rolling_sharpe_chart')
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'invest_rolling_sharpe_chart')
 @require_role_cb(Role.ADMIN)
 def cb_invest_rolling_sharpe_chart(call):
     """График rolling Sharpe."""
-    bot.answer_callback_query(call.id, "📈 Строю график...")
+    bot_tg.answer_callback_query(call.id, "📈 Строю график...")
 
     try:
         from reports.rolling_chart import build_rolling_sharpe_chart
         path = build_rolling_sharpe_chart()
     except Exception as e:
-        bot.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
+        bot_tg.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
         return
 
     with open(path, 'rb') as f:
-        bot.send_photo(
+        bot_tg.send_photo(
             call.message.chat.id,
             f,
             caption="📈 <b>Rolling Sharpe портфеля</b>\n\n"

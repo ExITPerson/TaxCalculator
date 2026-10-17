@@ -18,9 +18,9 @@ if proxy_url:
         'http': proxy_url,
         'https': proxy_url,
     }
-    print(f"[bot] Using proxy for Telegram: {proxy_url}")
+    print(f"[bot_tg] Using proxy for Telegram: {proxy_url}")
 else:
-    print("[bot] No proxy configured, connecting directly")
+    print("[bot_tg] No proxy configured, connecting directly")
 
 
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
+bot_tg = telebot.TeleBot(TELEGRAM_TOKEN)

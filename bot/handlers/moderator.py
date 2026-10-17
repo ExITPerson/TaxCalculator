@@ -1,4 +1,4 @@
-from bot.instance import bot
+from bot.instance import bot_tg
 from bot.decorator import require_role_cb, Role
 from bot.keyboard import back_to_menu
 from database.db import Session
@@ -54,15 +54,15 @@ def _build_report_text(report: dict) -> str:
 
 # ---------- отчёт ----------
 
-@bot.callback_query_handler(func=lambda c: c.data == 'menu_report')
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'menu_report')
 @require_role_cb(Role.MODERATOR)
 def cb_report(call):
-    bot.answer_callback_query(call.id, "🔄 Обновляю данные...")
+    bot_tg.answer_callback_query(call.id, "🔄 Обновляю данные...")
 
     try:
         sync_operations()
     except Exception as e:
-        bot.send_message(call.message.chat.id, f"⚠️ Ошибка синхронизации: {e}")
+        bot_tg.send_message(call.message.chat.id, f"⚠️ Ошибка синхронизации: {e}")
         return
 
     with Session() as session:
@@ -77,7 +77,7 @@ def cb_report(call):
     text = _build_report_text(report)
 
     try:
-        bot.edit_message_text(
+        bot_tg.edit_message_text(
             text,
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
@@ -89,7 +89,7 @@ def cb_report(call):
             raise
 
 
-@bot.callback_query_handler(func=lambda c: c.data == 'menu_balance')
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'menu_balance')
 @require_role_cb(Role.MODERATOR)
 def cb_balance(call):
     with Session() as session:
@@ -110,17 +110,17 @@ def cb_balance(call):
         f"Свободный: <code>{_fmt(balance_free)}</code>"
     )
 
-    bot.edit_message_text(
+    bot_tg.edit_message_text(
         text,
         call.message.chat.id,
         call.message.message_id,
         parse_mode='HTML',
         reply_markup=back_to_menu(),
     )
-    bot.answer_callback_query(call.id)
+    bot_tg.answer_callback_query(call.id)
 
 
-@bot.callback_query_handler(func=lambda c: c.data == 'limit')
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'limit')
 @require_role_cb(Role.MODERATOR)
 def cb_limit(call):
     with Session() as session:
@@ -136,7 +136,7 @@ def cb_limit(call):
     limit_total = report.get('Лимит УСН', 0)
     income = report.get('Поступления (выручка)', 0)
 
-    bot.edit_message_text(
+    bot_tg.edit_message_text(
         f"📏 <b>Лимит УСН</b>\n\n"
         f"Лимит: <code>{_fmt(limit_total)}</code>\n"
         f"Выручка: <code>{_fmt(income)}</code>\n"
@@ -146,4 +146,4 @@ def cb_limit(call):
         parse_mode='HTML',
         reply_markup=back_to_menu(),
     )
-    bot.answer_callback_query(call.id)
+    bot_tg.answer_callback_query(call.id)

@@ -1,7 +1,7 @@
 from enum import Enum
 from functools import lru_cache, wraps
 
-from bot.instance import bot
+from bot.instance import bot_tg
 from config.settings import ADMIN_IDS
 from database.db import Session
 
@@ -45,7 +45,7 @@ def require_role_cb(min_role: Role):
         def wrapper(call, *args, **kwargs):
             role = get_user_role(call.from_user.id)
             if ROLE_LEVEL[role] < ROLE_LEVEL[min_role]:
-                bot.answer_callback_query(call.id, "⛔ Недостаточно прав", show_alert=True)
+                bot_tg.answer_callback_query(call.id, "⛔ Недостаточно прав", show_alert=True)
                 return
             return func(call, *args, **kwargs)
         return wrapper
@@ -61,7 +61,7 @@ def require_role(min_role: Role):
                 return
             role = get_user_role(message.from_user.id)
             if ROLE_LEVEL[role] < ROLE_LEVEL[min_role]:
-                bot.reply_to(message, "⛔ Недостаточно прав")
+                bot_tg.reply_to(message, "⛔ Недостаточно прав")
                 return
             return func(message, *args, **kwargs)
         return wrapper
