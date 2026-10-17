@@ -1,7 +1,12 @@
 import logging
+import os
 import sys
 
 from telebot.handler_backends import SkipHandler
+
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from bot.instance import bot_tg
 from database.db import Session, engine, Base
