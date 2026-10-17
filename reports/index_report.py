@@ -99,17 +99,27 @@ def build_index_chart(output_path: str | None = None,
         raw_total = [float(s.total_value) for s in snapshots]
         raw_pnl = [float(s.pnl_value or 0) for s in snapshots]
 
-        # Фильтр: только дни, где капитал > 5000
-        MIN_CAPITAL_FOR_CHART = 5000.0
+        # --- УМНЫЙ ФИЛЬТР ---
+        # Если P&L упал более чем на 20 000 руб (или стоимость упала в 10 раз),
+        # значит в этот день API не отдал цены, и снапшот битый.
+        valid = []
+        for d, iv, tv, pv in zip(raw_dates, raw_index, raw_total, raw_pnl):
+            # Пропускаем дни с нулевым капиталом
+            if iv <= 0 or tv <= 5000:
+                continue
 
-        valid = [
-            (d, iv, tv, pv)
-            for d, iv, tv, pv in zip(raw_dates, raw_index, raw_total, raw_pnl)
-            if iv > 0 and tv > MIN_CAPITAL_FOR_CHART
-        ]
+            # Пропускаем дни, где P&L рухнул в глубокий минус (явный сбой цен)
+            if pv < -20000:
+                print(f"[!] Пропущен битый снапшот {d}: P&L={pv}, total={tv}")
+                continue
+
+            valid.append((d, iv, tv, pv))
 
         if not valid:
-            raise ValueError("Нет валидных snapshots (все с капиталом < 5000)")
+            raise ValueError("Нет валидных snapshots (все отфильтрованы как битые)")
+
+        # if not valid:
+        #     raise ValueError("Нет валидных snapshots (все с капиталом < 5000)")
 
         if len(valid) < len(raw_dates):
             skipped = len(raw_dates) - len(valid)
