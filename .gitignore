@@ -165,3 +165,9 @@ cython_debug/
 .idea
 
 /data/operations.db
+
+bot.log
+
+data/*.db
+data/*.png
+tmp/

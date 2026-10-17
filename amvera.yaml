@@ -5,4 +5,4 @@ meta:
     version: 3.12
 
 run:
-  scriptName: bot/connect.py
+  scriptName: main.py

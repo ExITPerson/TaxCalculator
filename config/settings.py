@@ -42,15 +42,14 @@ DATE_FROM = os.getenv('DATE_FROM', (datetime.now() - timedelta(days=30)).strftim
 
 RISK_FREE_RATE = float(os.getenv('RISK_FREE_RATE', '0.13'))
 
-def build_invest_payload(account_id: str) -> dict:
-
+def build_invest_payload(account_id: str, cursor: str | None = None) -> dict:
     payload = {
-        'accountId': account_id,
-        'from': (datetime.utcnow() - timedelta(days=365)).strftime('%Y-%m-%dT%H:%M:%SZ'),
-        'to': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+        "accountId": account_id,
+        "from": (datetime.utcnow() - timedelta(days=365)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "to": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     if cursor:
-        payload['cursor'] = cursor
+        payload["cursor"] = cursor
     return payload
 
 # payload собирается функцией, чтобы не было мутабельного объекта на уровне модуля

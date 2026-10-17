@@ -43,14 +43,15 @@ if IS_POSTGRES:
         pool_size=10,
         max_overflow=20,
         pool_pre_ping=True,
+        connect_args={"connect_timeout": 10},
     )
 else:
-    DB_DIR = BASE_DIR / 'data'
+    DB_DIR = BASE_DIR / "data"
     DB_DIR.mkdir(exist_ok=True)
     engine = create_engine(
         DATABASE_URL,
         echo=False,
-        connect_args={'check_same_thread': False},
+        connect_args={"check_same_thread": False, "timeout": 10},
     )
 
 Session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
