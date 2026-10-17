@@ -80,7 +80,12 @@ USN_LIMIT = float(os.getenv('USN_LIMIT', '19999999'))
 # HTTP
 API_TIMEOUT = float(os.getenv('API_TIMEOUT', '30'))
 API_RETRIES = int(os.getenv('API_RETRIES', '3'))
-CA_BUNDLE = '/config/cert.cer'
+
+if os.name == 'nt':  # Windows
+    # Укажите фактический локальный путь к сертификату, например, в папке проекта
+    CA_BUNDLE = os.path.join(os.path.dirname(__file__), 'cert.cer')
+else:  # Linux / контейнер Amvera
+    CA_BUNDLE = '/config/cert.cer'
 
 #Telegram
 TELEGRAM_TOKEN = _require('TELEGRAM_TOKEN')
