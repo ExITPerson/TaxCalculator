@@ -58,7 +58,7 @@ url = URL.create(
     drivername="postgresql+psycopg",  # Обратите внимание на регистр, не должно быть пробелов
     username="baranovs11",
     password="mongol222",  # Если в пароле есть специальные символы, URL.create автоматически закодирует их
-    host="amvera-baranovs11-cnpg-taxcalculator-rw",  # Используйте полное доменное имя, подтверждённое ранее
+    host="cnpg-taxcalculator-rw",  # Используйте полное доменное имя, подтверждённое ранее
     port=5432,
     database="taxcal"
 )
