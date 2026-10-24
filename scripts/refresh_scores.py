@@ -4,12 +4,11 @@ import time
 import logging
 from pathlib import Path
 
-from invest.bond_resolver import ensure_bond_in_db
-
 # Чтобы скрипт видел корень проекта
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from database.db import Session
+from invest.bond_resolver import ensure_bond_in_db
 from database.crud import CachedScoreCrud
 from database.instrument_crud import InstrumentCrud
 from invest.scoring.final_verdict import final_verdict

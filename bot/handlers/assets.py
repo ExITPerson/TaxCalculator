@@ -310,3 +310,97 @@ def cb_top_allocations(call):
         text, call.message.chat.id, call.message.message_id,
         parse_mode='HTML', reply_markup=top_assets_keyboard()
     )
+
+# ============ РЕДАКТИРОВАНИЕ РЕЙТИНГОВ ОБЛИГАЦИЙ ============
+
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'asset_bond_ratings')
+@require_role_cb(Role.ADMIN)
+def cb_asset_bond_ratings(call):
+    msg = bot_tg.edit_message_text(
+        "⚙️ <b>Настройка рейтингов облигаций</b>\n\n"
+        "Введи <b>ISIN</b> облигации, для которой хочешь задать или обновить рейтинг\n"
+        "<i>(например, RU000A10EJR5)</i>:\n\n"
+        "Или напиши <i>«отмена»</i>, чтобы выйти.",
+        call.message.chat.id, call.message.message_id,
+        parse_mode='HTML', reply_markup=back_to_menu()
+    )
+    bot_tg.answer_callback_query(call.id)
+    bot_tg.register_next_step_handler(msg, process_bond_rating_isin)
+
+
+def process_bond_rating_isin(message):
+    text = (message.text or '').strip().upper()
+    if text.lower() in ('отмена', 'cancel', '/cancel'):
+        bot_tg.send_message(message.chat.id, "Отменено.", reply_markup=assets_menu())
+        return
+
+    if not text:
+        bot_tg.send_message(message.chat.id, "⚠️ Пустой ввод. Попробуй снова.")
+        return
+
+    # Проверяем, есть ли облигация в БД
+    with Session() as s:
+        crud = InstrumentCrud(s)
+        info = crud.get_by_ticker(text)
+
+        if not info:
+            # Если нет в БД по тикеру, пробуем найти через API
+            figi = ensure_bond_in_db(text, save=True)
+            if not figi:
+                bot_tg.send_message(message.chat.id,
+                                    f"⚠️ Облигация <b>{html.escape(text)}</b> не найдена. Проверь ISIN.")
+                return
+            # После ensure_bond_in_db она должна появиться в БД
+            info = crud.get(figi)
+
+        if not info:
+            bot_tg.send_message(message.chat.id, "⚠️ Не удалось найти облигацию в БД после запроса к API.")
+            return
+
+        # Сохраняем FIGI в контексте, чтобы знать, что обновлять
+        figi = info.figi
+        current_rating = info.credit_rating or "не задан"
+
+    msg = bot_tg.send_message(
+        message.chat.id,
+        f"📜 <b>{html.escape(info.ticker or text)}</b>\n"
+        f"Текущий рейтинг: <b>{html.escape(current_rating)}</b>\n\n"
+        f"Введи новый рейтинг <i>(например, AAA, AA+, BBB, BB-)</i>:\n"
+        f"Или напиши <i>«отмена»</i>.",
+        parse_mode='HTML'
+    )
+    # Передаем figi в следующий шаг через лямбду/аргумент.
+    # В telebot можно передать доп. аргументы в register_next_step_handler
+    bot_tg.register_next_step_handler(msg, process_bond_rating_value, figi=figi)
+
+
+def process_bond_rating_value(message, figi):
+    text = (message.text or '').strip().upper()
+    if text.lower() in ('отмена', 'cancel', '/cancel'):
+        bot_tg.send_message(message.chat.id, "Отменено.", reply_markup=assets_menu())
+        return
+
+    # Простейшая валидация: рейтинг должен содержать буквы A, B, C
+    if not any(c in text for c in ('A', 'B', 'C')):
+        bot_tg.send_message(message.chat.id, "⚠️ Некорректный формат рейтинга. Попробуй снова (или «отмена»).")
+        bot_tg.register_next_step_handler(message, process_bond_rating_value, figi=figi)
+        return
+
+    # Сохраняем рейтинг в БД
+    with Session() as s:
+        crud = InstrumentCrud(s)
+        info = crud.get(figi)
+        if not info:
+            bot_tg.send_message(message.chat.id, "⚠️ Облигация исчезла из БД. Отмена.")
+            return
+
+        info.credit_rating = text
+        s.commit()
+
+    bot_tg.send_message(
+        message.chat.id,
+        f"✅ Рейтинг для <b>{html.escape(info.ticker or figi)}</b> обновлен на <b>{html.escape(text)}</b>.\n\n"
+        f"Теперь можно оценить облигацию через меню «📜 Оценить облигацию».",
+        parse_mode='HTML',
+        reply_markup=assets_menu()
+    )

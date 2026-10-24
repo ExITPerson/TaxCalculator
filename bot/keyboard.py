@@ -141,6 +141,7 @@ def assets_menu() -> types.InlineKeyboardMarkup:
     markup.add(
         types.InlineKeyboardButton('⚔️ Сравнить акции', callback_data='asset_compare'),
         types.InlineKeyboardButton('🏆 Топ идей', callback_data='asset_top'),
+        types.InlineKeyboardButton('⚙️ Рейтинги облигаций', callback_data='asset_bond_ratings')
     )
     markup.add(types.InlineKeyboardButton('⬅️ Назад', callback_data='back_to_main'))
     return markup

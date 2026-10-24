@@ -17,30 +17,39 @@ logger = logging.getLogger(__name__)
 def ensure_bond_in_db(ticker: str, save: bool = True, force_update: bool = False) -> str | None:
     """
     Убеждается, что облигация есть в БД.
-    Если force_update=True или данные устарели — обновляет их из API.
+    Если force_update=True или данные устарели (TTL 24ч) — обновляет их из API.
+
+    :param ticker: ISIN облигации (например, 'RU000A10EJR5') или FIGI
+    :param save: сохранять ли в БД
+    :param force_update: принудительно обновить данные из API, даже если они свежие
+    :return: FIGI или None
     """
     ticker = ticker.strip().upper()
+    figi = None  # Инициализируем переменную, чтобы избежать UnboundLocalError
 
-    # --- 1. Ищем в БД по ticker ---
+    # --- 1. Ищем в БД по ticker (ISIN) ---
     with Session() as s:
         crud = InstrumentCrud(s)
         info = crud.get_by_ticker(ticker)
 
         if info and info.figi:
-            # Если данные не устарели — возвращаем сразу
+            figi = info.figi
+
+            # Если данные не устарели и не просят принудительно обновить — возвращаем сразу
             if not force_update and not crud.is_stale(info.figi, ttl_hours=24):
                 logger.debug("Найдено в БД (свежее): %s → %s", ticker, info.figi)
                 return info.figi
             else:
-                logger.info("Данные %s устарели. Обновляем...", ticker)
-                figi = info.figi
+                logger.info("Данные %s устарели (или force_update). Обновляем...", ticker)
 
-    # --- 2. Если обновляем или ищем в портфеле ---
+    # --- 2. Если FIGI не нашли в БД, ищем в текущем портфеле ---
     if not figi:
         figi = _find_figi_in_portfolio(ticker)
 
+    # --- 3. Если нашли FIGI (в БД или портфеле) и нужно обновить данные ---
     if figi:
         if save:
+            # Запрашиваем свежие данные у T-Invest API
             data = _fetch_from_tinvest(ticker)
             if data:
                 _save_bond(
@@ -53,13 +62,13 @@ def ensure_bond_in_db(ticker: str, save: bool = True, force_update: bool = False
                 )
         return figi
 
-    # --- 3. Запрашиваем у T-Invest API по ISIN ---
+    # --- 4. Если нигде не нашли, запрашиваем у T-Invest API по ISIN ---
     data = _fetch_from_tinvest(ticker)
     if not data:
         logger.warning("Не удалось найти облигацию %s нигде", ticker)
         return None
 
-    figi = data.get('figi') or ticker
+    figi = data.get('figi') or ticker  # fallback, если API вернул только ISIN
     if save:
         _save_bond(
             figi=figi,
