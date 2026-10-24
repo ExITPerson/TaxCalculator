@@ -486,7 +486,7 @@ def build_pnl_treemap(output_path: str | None = None, account_id: str | None = N
 # 6. Детальная структура (Pie по бумагам)
 # ============================================================
 def build_portfolio_detailed_pie(output_path: str | None = None, account_id: str | None = None) -> str:
-    """Круговая диаграмма по конкретным бумагам."""
+    """Круговая диаграмма по всем конкретным бумагам (без группировки в 'Прочее')."""
     from invest.portfolio_client import TInvestPortfolioClient, parse_portfolio
     from config.settings import ACCOUNTS_ID
     from database.db import Session
@@ -525,43 +525,54 @@ def build_portfolio_detailed_pie(output_path: str | None = None, account_id: str
             elif item['api_ticker']:
                 item['ticker'] = item['api_ticker']
             else:
-                item['ticker'] = item['figi'][:6]  # fallback
+                item['ticker'] = item['figi'][:6]
 
-    # Группируем мелкие позиции (< 2% от общего) в "Прочее"
-    total = sum(item['value'] for item in items)
+    # Сортируем по убыванию стоимости
     items.sort(key=lambda x: x['value'], reverse=True)
 
-    main_items = []
-    other_val = 0
+    labels = [item['ticker'] for item in items]
+    sizes = [item['value'] for item in items]
+    total = sum(sizes)
 
-    for item in items:
-        if item['value'] / total > 0.02:
-            main_items.append((item['ticker'], item['value']))
-        else:
-            other_val += item['value']
+    # Настраиваем размер шрифта в зависимости от количества активов
+    font_size = max(6, min(10, int(100 / len(items))))
 
-    if other_val > 0:
-        main_items.append(("Прочее (мелкие)", other_val))
+    fig, ax = plt.subplots(figsize=(12, 10))  # Увеличили размер для читаемости
 
-    labels = [t for t, v in main_items]
-    sizes = [v for t, v in main_items]
-
-    fig, ax = plt.subplots(figsize=(10, 8))
-
+    # Строим "бублик"
     wedges, texts, autotexts = ax.pie(
-        sizes, labels=labels, autopct='%1.1f%%',
-        startangle=90, pctdistance=0.85,
-        wedgeprops={'edgecolor': 'white', 'linewidth': 2},
-        textprops={'fontsize': 9}
+        sizes,
+        labels=None,  # Убираем подписи с графика (они будут в легенде)
+        autopct='%1.1f%%',
+        startangle=90,
+        pctdistance=0.85,
+        wedgeprops={'edgecolor': 'white', 'linewidth': 1.5},
+        textprops={'fontsize': font_size}
     )
 
-    # Делаем "бублик"
+    # Делаем "бублик" (вырезаем центр)
     centre_circle = plt.Circle((0, 0), 0.70, fc='white')
     fig.gca().add_artist(centre_circle)
 
-    ax.text(0, 0, f'{total:,.0f}\n₽', ha='center', va='center', fontsize=14, fontweight='bold')
+    # Текст в центре
+    ax.text(0, 0, f'{total:,.0f}\n₽', ha='center', va='center', fontsize=16, fontweight='bold')
     ax.axis('equal')
-    ax.set_title('Структура по бумагам', fontsize=14, pad=20)
+
+    # Легенда со всеми активами (справа)
+    legend_labels = [
+        f"{label}: {val:,.0f} ₽ ({val / total * 100:.1f}%)"
+        for label, val in zip(labels, sizes)
+    ]
+
+    ax.legend(
+        wedges, legend_labels,
+        title="Активы",
+        loc="center left",
+        bbox_to_anchor=(1.05, 0.5),
+        fontsize=9
+    )
+
+    ax.set_title(f'Структура по бумагам\nВсего: {total:,.2f} ₽', fontsize=16, pad=20)
 
     plt.tight_layout()
     fig.savefig(output_path, dpi=120, bbox_inches='tight')

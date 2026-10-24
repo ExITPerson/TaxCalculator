@@ -256,11 +256,9 @@ def cb_metrics_rtsi(call):
 @require_role_cb(Role.ADMIN)
 def cb_invest_pie(call):
     bot_tg.answer_callback_query(call.id, "🥧 Строю диаграмму...")
-
     try:
-        from reports.portfolio_charts import build_portfolio_pie_chart
-
-        path = build_portfolio_pie_chart()
+        from reports.portfolio_charts import build_portfolio_detailed_pie
+        path = build_portfolio_detailed_pie()
     except Exception as e:
         bot_tg.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
         return
@@ -269,8 +267,7 @@ def cb_invest_pie(call):
         bot_tg.send_photo(
             call.message.chat.id,
             f,
-            caption="🥧 <b>Структура портфеля</b>\n"
-                    "Распределение активов по типам.",
+            caption="🥧 <b>Структура портфеля</b>\nРаспределение активов по типам.",
             parse_mode='HTML',
             reply_markup=invest_chart_keyboard(),
         )
