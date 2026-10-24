@@ -14,20 +14,10 @@ from config.settings import ACCOUNTS_ID
 logger = logging.getLogger(__name__)
 
 
-def ensure_bond_in_db(ticker: str, save: bool = True) -> str | None:
+def ensure_bond_in_db(ticker: str, save: bool = True, force_update: bool = False) -> str | None:
     """
     Убеждается, что облигация есть в БД.
-
-    Логика:
-    1. Ищем по ticker (= ISIN) в instrument_info.
-    2. Если нет — ищем в текущем портфеле (у него есть figi).
-    3. Если нет — запрашиваем у T-Invest API по ISIN.
-    4. Если нашли — сохраняем в БД.
-    5. Возвращаем FIGI (или None, если не нашли).
-
-    :param ticker: ISIN облигации (например, 'RU000A10EJR5')
-    :param save: сохранять ли в БД
-    :return: FIGI или None
+    Если force_update=True или данные устарели — обновляет их из API.
     """
     ticker = ticker.strip().upper()
 
@@ -35,15 +25,32 @@ def ensure_bond_in_db(ticker: str, save: bool = True) -> str | None:
     with Session() as s:
         crud = InstrumentCrud(s)
         info = crud.get_by_ticker(ticker)
-        if info and info.figi:
-            logger.debug("Найдено в БД: %s → %s", ticker, info.figi)
-            return info.figi
 
-    # --- 2. Ищем в текущем портфеле (там точно есть figi) ---
-    figi = _find_figi_in_portfolio(ticker)
+        if info and info.figi:
+            # Если данные не устарели — возвращаем сразу
+            if not force_update and not crud.is_stale(info.figi, ttl_hours=24):
+                logger.debug("Найдено в БД (свежее): %s → %s", ticker, info.figi)
+                return info.figi
+            else:
+                logger.info("Данные %s устарели. Обновляем...", ticker)
+                figi = info.figi
+
+    # --- 2. Если обновляем или ищем в портфеле ---
+    if not figi:
+        figi = _find_figi_in_portfolio(ticker)
+
     if figi:
         if save:
-            _save_bond(figi, ticker)
+            data = _fetch_from_tinvest(ticker)
+            if data:
+                _save_bond(
+                    figi=figi,
+                    ticker=data.get('ticker') or ticker,
+                    name=data.get('name'),
+                    instrument_type=data.get('instrument_type'),
+                    sector=data.get('sector'),
+                    instrument_uid=data.get('instrument_uid'),
+                )
         return figi
 
     # --- 3. Запрашиваем у T-Invest API по ISIN ---
@@ -52,7 +59,7 @@ def ensure_bond_in_db(ticker: str, save: bool = True) -> str | None:
         logger.warning("Не удалось найти облигацию %s нигде", ticker)
         return None
 
-    figi = data.get('figi') or ticker  # fallback
+    figi = data.get('figi') or ticker
     if save:
         _save_bond(
             figi=figi,
