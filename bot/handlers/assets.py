@@ -1,6 +1,7 @@
 # bot/assets.py
 import logging
 import html
+import re
 from bot.instance import bot_tg
 from bot.decorator import require_role_cb, Role
 from bot.keyboard import back_to_menu, assets_menu, score_result_keyboard, top_assets_keyboard
@@ -200,7 +201,6 @@ def cb_top_stocks_15(call):
     bot_tg.answer_callback_query(call.id, "⏳ Ищу лучшие акции...")
 
     with Session() as s:
-        # Берем Топ-15 акций с вердиктом BUY, затем HOLD
         rows = s.query(CachedScoreDB).filter(
             CachedScoreDB.score_type == 'stock'
         ).order_by(
@@ -231,12 +231,9 @@ def cb_top_bonds_20(call):
     bot_tg.answer_callback_query(call.id, "⏳ Ищу лучшие облигации...")
 
     with Session() as s:
-        # Для облигаций score_value = 0 (мы его не считаем), поэтому сортируем по вердикту
-        # Сначала BUY, потом HOLD, внутри по алфавиту
         rows = s.query(CachedScoreDB).filter(
             CachedScoreDB.score_type == 'bond'
         ).order_by(
-            # Сортировка по вердикту: BUY -> HOLD -> AVOID
             CachedScoreDB.verdict.asc(),
             CachedScoreDB.ticker.asc()
         ).limit(20).all()
@@ -264,13 +261,11 @@ def cb_top_allocations(call):
     bot_tg.answer_callback_query(call.id, "⚖️ Считаю рекомендуемые доли...")
 
     with Session() as s:
-        # Берем Топ-5 акций с оценкой выше 0
         stocks = s.query(CachedScoreDB).filter(
             CachedScoreDB.score_type == 'stock',
             CachedScoreDB.score_value > 0
         ).order_by(CachedScoreDB.score_value.desc()).limit(5).all()
 
-        # Берем Топ-5 облигаций с вердиктом BUY
         bonds = s.query(CachedScoreDB).filter(
             CachedScoreDB.score_type == 'bond',
             CachedScoreDB.verdict == 'BUY'
@@ -311,96 +306,143 @@ def cb_top_allocations(call):
         parse_mode='HTML', reply_markup=top_assets_keyboard()
     )
 
-# ============ РЕДАКТИРОВАНИЕ РЕЙТИНГОВ ОБЛИГАЦИЙ ============
+
+# ============ ПАКЕТНОЕ РЕДАКТИРОВАНИЕ РЕЙТИНГОВ ОБЛИГАЦИЙ ============
 
 @bot_tg.callback_query_handler(func=lambda c: c.data == 'asset_bond_ratings')
 @require_role_cb(Role.ADMIN)
 def cb_asset_bond_ratings(call):
     msg = bot_tg.edit_message_text(
-        "⚙️ <b>Настройка рейтингов облигаций</b>\n\n"
-        "Введи <b>ISIN</b> облигации, для которой хочешь задать или обновить рейтинг\n"
-        "<i>(например, RU000A10EJR5)</i>:\n\n"
+        "⚙️ <b>Настройка рейтингов облигаций (Пакетный режим)</b>\n\n"
+        "Введи список <b>ISIN</b> или <b>FIGI</b> облигаций через запятую или пробел.\n"
+        "Например: <code>RU000A10EJR5, RU000A10FWA1, TCS80A101X50</code>\n\n"
+        "Можно ввести до 10 штук за раз.\n"
         "Или напиши <i>«отмена»</i>, чтобы выйти.",
         call.message.chat.id, call.message.message_id,
         parse_mode='HTML', reply_markup=back_to_menu()
     )
     bot_tg.answer_callback_query(call.id)
-    bot_tg.register_next_step_handler(msg, process_bond_rating_isin)
+    bot_tg.register_next_step_handler(msg, process_bond_list)
 
 
-def process_bond_rating_isin(message):
-    text = (message.text or '').strip().upper()
+def process_bond_list(message):
+    text = (message.text or '').strip()
     if text.lower() in ('отмена', 'cancel', '/cancel'):
         bot_tg.send_message(message.chat.id, "Отменено.", reply_markup=assets_menu())
         return
 
-    if not text:
-        bot_tg.send_message(message.chat.id, "⚠️ Пустой ввод. Попробуй снова.")
+    tickers = [t.strip().upper() for t in re.split(r'[,\s]+', text) if t.strip()]
+
+    if not tickers:
+        bot_tg.send_message(message.chat.id, "⚠️ Не найдено ни одного тикера. Попробуй снова.")
         return
 
-    # Проверяем, есть ли облигация в БД
+    if len(tickers) > 10:
+        bot_tg.send_message(message.chat.id, f"⚠️ Слишком много тикеров ({len(tickers)}). Максимум 10 за раз.")
+        return
+
+    # Сохраняем очередь в контексте бота
+    state = {
+        'queue': tickers,
+        'current_idx': 0,
+        'results': {}  # {figi: rating}
+    }
+
+    # Запускаем процесс
+    ask_next_bond_rating(message.chat.id, state)
+
+
+def ask_next_bond_rating(chat_id: int, state: dict):
+    """Рекурсивно запрашивает рейтинг для следующей облигации из очереди."""
+    if state['current_idx'] >= len(state['queue']):
+        # Все облигации обработаны — сохраняем в БД
+        save_bond_ratings_to_db(chat_id, state['results'])
+        return
+
+    ticker = state['queue'][state['current_idx']]
+
+    # Пытаемся найти или создать облигацию в БД
     with Session() as s:
         crud = InstrumentCrud(s)
-        info = crud.get_by_ticker(text)
+        info = crud.get_by_ticker(ticker)
 
         if not info:
-            # Если нет в БД по тикеру, пробуем найти через API
-            figi = ensure_bond_in_db(text, save=True)
-            if not figi:
-                bot_tg.send_message(message.chat.id,
-                                    f"⚠️ Облигация <b>{html.escape(text)}</b> не найдена. Проверь ISIN.")
-                return
-            # После ensure_bond_in_db она должна появиться в БД
-            info = crud.get(figi)
+            # Пытаемся найти через API и сохранить
+            figi = ensure_bond_in_db(ticker, save=True)
+            if figi:
+                info = crud.get(figi)
 
         if not info:
-            bot_tg.send_message(message.chat.id, "⚠️ Не удалось найти облигацию в БД после запроса к API.")
+            # Если даже API не помог — пропускаем
+            bot_tg.send_message(chat_id, f"⚠️ <b>{html.escape(ticker)}</b> не найдена в API/БД. Пропускаем.")
+            state['current_idx'] += 1
+            ask_next_bond_rating(chat_id, state)
             return
 
-        # Сохраняем FIGI в контексте, чтобы знать, что обновлять
         figi = info.figi
         current_rating = info.credit_rating or "не задан"
+        display_ticker = info.ticker or ticker
 
     msg = bot_tg.send_message(
-        message.chat.id,
-        f"📜 <b>{html.escape(info.ticker or text)}</b>\n"
+        chat_id,
+        f"<b>[{state['current_idx'] + 1}/{len(state['queue'])}]</b> "
+        f"📜 <b>{html.escape(display_ticker)}</b>\n"
         f"Текущий рейтинг: <b>{html.escape(current_rating)}</b>\n\n"
-        f"Введи новый рейтинг <i>(например, AAA, AA+, BBB, BB-)</i>:\n"
-        f"Или напиши <i>«отмена»</i>.",
+        f"Введи новый рейтинг <i>(например, AAA, AA+, BBB)</i>:\n"
+        f"Или напиши <i>«пропустить»</i> / <i>«отмена»</i>.",
         parse_mode='HTML'
     )
-    # Передаем figi в следующий шаг через лямбду/аргумент.
-    # В telebot можно передать доп. аргументы в register_next_step_handler
-    bot_tg.register_next_step_handler(msg, process_bond_rating_value, figi=figi)
+    bot_tg.register_next_step_handler(msg, process_single_rating, state=state, figi=figi)
 
 
-def process_bond_rating_value(message, figi):
+def process_single_rating(message, state: dict, figi: str):
     text = (message.text or '').strip().upper()
+
     if text.lower() in ('отмена', 'cancel', '/cancel'):
-        bot_tg.send_message(message.chat.id, "Отменено.", reply_markup=assets_menu())
+        bot_tg.send_message(message.chat.id, "❌ Отменено. Введенные данные не сохранены.", reply_markup=assets_menu())
         return
 
-    # Простейшая валидация: рейтинг должен содержать буквы A, B, C
-    if not any(c in text for c in ('A', 'B', 'C')):
-        bot_tg.send_message(message.chat.id, "⚠️ Некорректный формат рейтинга. Попробуй снова (или «отмена»).")
-        bot_tg.register_next_step_handler(message, process_bond_rating_value, figi=figi)
+    if text.lower() in ('пропустить', 'skip', 'пропуск'):
+        # Пропускаем, переходим к следующему
+        state['current_idx'] += 1
+        ask_next_bond_rating(message.chat.id, state)
         return
 
-    # Сохраняем рейтинг в БД
+    # Валидация рейтинга
+    if not any(c in text for c in ('A', 'B', 'C', 'D')):
+        bot_tg.send_message(message.chat.id, "⚠️ Некорректный формат. Введи рейтинг (например, AAA) или «пропустить».")
+        bot_tg.register_next_step_handler(message, process_single_rating, state=state, figi=figi)
+        return
+
+    # Сохраняем во временный словарь
+    state['results'][figi] = text
+    state['current_idx'] += 1
+
+    # Переходим к следующему
+    ask_next_bond_rating(message.chat.id, state)
+
+
+def save_bond_ratings_to_db(chat_id: int, results: dict):
+    """Сохраняет все собранные рейтинги в БД."""
+    if not results:
+        bot_tg.send_message(chat_id, "⚠️ Не было введено ни одного рейтинга.", reply_markup=assets_menu())
+        return
+
+    saved_count = 0
     with Session() as s:
         crud = InstrumentCrud(s)
-        info = crud.get(figi)
-        if not info:
-            bot_tg.send_message(message.chat.id, "⚠️ Облигация исчезла из БД. Отмена.")
-            return
-
-        info.credit_rating = text
+        for figi, rating in results.items():
+            info = crud.get(figi)
+            if info:
+                info.credit_rating = rating
+                saved_count += 1
         s.commit()
 
-    bot_tg.send_message(
-        message.chat.id,
-        f"✅ Рейтинг для <b>{html.escape(info.ticker or figi)}</b> обновлен на <b>{html.escape(text)}</b>.\n\n"
-        f"Теперь можно оценить облигацию через меню «📜 Оценить облигацию».",
-        parse_mode='HTML',
-        reply_markup=assets_menu()
-    )
+    text = f"✅ <b>Успешно сохранено рейтингов: {saved_count}</b>\n\n"
+    for figi, rating in results.items():
+        with Session() as s:
+            info = InstrumentCrud(s).get(figi)
+            ticker = info.ticker if info else figi
+        text += f"  • <b>{html.escape(ticker)}</b> → {html.escape(rating)}\n"
+
+    bot_tg.send_message(chat_id, text, parse_mode='HTML', reply_markup=assets_menu())
