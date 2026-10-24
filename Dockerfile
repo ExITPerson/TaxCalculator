@@ -10,6 +10,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# Устанавливаем системные зависимости
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
@@ -17,26 +18,34 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-
 # --- Зависимости ---
 FROM base AS deps
 
 COPY requirements.txt .
+# Важно: psycopg[binary] должен быть в requirements.txt
 RUN pip install --upgrade pip && pip install -r requirements.txt
-
 
 # --- Финальный образ ---
 FROM base AS runtime
 
+# Копируем установленные пакеты из deps
 COPY --from=deps /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=deps /usr/local/bin /usr/local/bin
+
+# Копируем сертификат (если он нужен для T-Invest)
 COPY config/cert.cer /config/cert.cer
 
+# Копируем весь проект
 COPY . .
 
-RUN mkdir -p /app/data /app/logs
+# Создаем папки для данных и логов, а также папку /data для Amvera
+RUN mkdir -p /app/data /app/logs /data
 
-RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+# Создаем пользователя и даем ему права на запись во все нужные папки
+RUN useradd -m -u 1000 appuser && \
+    chown -R appuser:appuser /app /data /config
+
 USER appuser
 
+# Запускаем через main.py (как у вас в логах)
 CMD ["python", "main.py"]
