@@ -1,6 +1,6 @@
 from bot.instance import bot_tg
 from bot.decorator import get_user_role, Role, require_role
-from bot.keyboard import main_menu, back_to_menu
+from bot.keyboard import main_menu
 from database.crud import CashWithdrawalCrud
 from database.db import Session
 
@@ -108,3 +108,29 @@ def cmd_cash_del(message):
     with Session() as session:
         ok = CashWithdrawalCrud(session).delete(int(parts[1]))
     bot_tg.reply_to(message, "✅ Удалено." if ok else "❌ Запись не найдена.")
+
+
+from bot.handlers.assets import process_stock_ticker, process_bond_isin
+
+@bot_tg.message_handler(commands=['stock'])
+@require_role(Role.ADMIN)
+def cmd_stock(message):
+    parts = message.text.split()
+    if len(parts) == 2:
+        # Если тикер передан сразу: /stock SBER
+        message.text = parts[1]
+        process_stock_ticker(message)
+    else:
+        msg = bot_tg.reply_to(message, "Введи тикер акции:")
+        bot_tg.register_next_step_handler(msg, process_stock_ticker)
+
+@bot_tg.message_handler(commands=['bond'])
+@require_role(Role.ADMIN)
+def cmd_bond(message):
+    parts = message.text.split()
+    if len(parts) == 2:
+        message.text = parts[1]
+        process_bond_isin(message)
+    else:
+        msg = bot_tg.reply_to(message, "Введи ISIN облигации:")
+        bot_tg.register_next_step_handler(msg, process_bond_isin)

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Iterable, Optional
 
@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from clients.normalized import NormalizedOperation, OperationCategory
 from database.db import (
     OperationsDB, CounterpartyDB, Role, UserDB,
-    CashWithdrawalDB, InvestOperationDB, BalanceAdjustmentDB,
+    CashWithdrawalDB, InvestOperationDB, BalanceAdjustmentDB, CachedScoreDB,
 )
 from invest.models import BaseOperation
 
@@ -626,3 +626,43 @@ class InvestCrud:
             figi: sum(kinds.values())
             for figi, kinds in by_figi.items()
         }
+
+
+class CachedScoreCrud:
+    def __init__(self, session):
+        self.__session = session
+
+    def get(self, ticker: str, score_type: str, ttl_hours: int = 24) -> CachedScoreDB | None:
+        row = self.__session.query(CachedScoreDB).filter_by(
+            ticker=ticker.upper(), score_type=score_type
+        ).first()
+
+        if not row:
+            return None
+
+        # Если данные устарели — возвращаем None (заставит бота обновить)
+        age = datetime.utcnow() - row.updated_at
+        if age > timedelta(hours=ttl_hours):
+            return None
+
+        return row
+
+    def save(self, ticker: str, score_type: str, score_value: float, verdict: str, text_result: str):
+        row = self.__session.query(CachedScoreDB).filter_by(
+            ticker=ticker.upper(), score_type=score_type
+        ).first()
+
+        if row:
+            row.score_value = score_value
+            row.verdict = verdict
+            row.text_result = text_result
+            row.updated_at = datetime.utcnow()
+        else:
+            self.__session.add(CachedScoreDB(
+                ticker=ticker.upper(),
+                score_type=score_type,
+                score_value=score_value,
+                verdict=verdict,
+                text_result=text_result
+            ))
+        self.__session.commit()

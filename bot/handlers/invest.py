@@ -539,3 +539,92 @@ def cb_invest_rolling_sharpe_chart(call):
             parse_mode='HTML',
             reply_markup=invest_chart_keyboard(),
         )
+
+
+# bot/invest.py (добавить в конец файла)
+
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'invest_treemap')
+@require_role_cb(Role.ADMIN)
+def cb_invest_treemap(call):
+    bot_tg.answer_callback_query(call.id, "🔥 Строю тепловую карту...")
+    try:
+        from reports.portfolio_charts import build_pnl_treemap
+        path = build_pnl_treemap()
+    except Exception as e:
+        bot_tg.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
+        return
+
+    with open(path, 'rb') as f:
+        bot_tg.send_photo(call.message.chat.id, f,
+                          caption="🔥 <b>Тепловая карта P&L</b>\nРазмер блока = стоимость, Цвет = P&L",
+                          parse_mode='HTML', reply_markup=invest_chart_keyboard())
+
+
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'invest_detailed_pie')
+@require_role_cb(Role.ADMIN)
+def cb_invest_detailed_pie(call):
+    bot_tg.answer_callback_query(call.id, "🥧 Строю детальную структуру...")
+    try:
+        from reports.portfolio_charts import build_portfolio_detailed_pie
+        path = build_portfolio_detailed_pie()
+    except Exception as e:
+        bot_tg.send_message(call.message.chat.id, f"⚠️ Ошибка: {e}")
+        return
+
+    with open(path, 'rb') as f:
+        bot_tg.send_photo(call.message.chat.id, f, caption="🥧 <b>Структура по бумагам</b>", parse_mode='HTML',
+                          reply_markup=invest_chart_keyboard())
+
+
+# Оценка всего портфеля (Фундаментал)
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'invest_fundamental_score')
+@require_role_cb(Role.ADMIN)
+def cb_invest_fund_score(call):
+    bot_tg.answer_callback_query(call.id, "🧠 Считаю средний балл портфеля...")
+
+    from database.instrument_crud import InstrumentCrud
+    from database.db import Session
+    from invest.scoring.final_verdict import final_verdict
+
+    with Session() as s:
+        positions = InstrumentCrud(s).get_all()  # Берем все, потом отфильтруем
+
+    # (Здесь нужна логика получения текущих позиций из API, чтобы не оценивать то, чего нет)
+    # Для простоты — оцениваем топ-10 по весу из парсера портфеля:
+    from invest.portfolio_client import TInvestPortfolioClient, parse_portfolio
+    from config.settings import ACCOUNTS_ID
+
+    tickers = []
+    with TInvestPortfolioClient() as client:
+        for acc in ACCOUNTS_ID:
+            raw = client.fetch_portfolio(acc)
+            if not raw: continue
+            p = parse_portfolio(raw)
+            # Берем только акции
+            for pos in p['positions']:
+                if pos['instrument_type'] == 'share' and pos['ticker']:
+                    tickers.append(pos['ticker'])
+
+    if not tickers:
+        bot_tg.send_message(call.message.chat.id, "Нет акций в портфеле для оценки.")
+        return
+
+    results = []
+    for t in set(tickers):
+        try:
+            res = final_verdict(t, auto_backfill=False)  # Без парсинга, чтоб быстро
+            if 'score' in res:
+                results.append((t, res['score'], res['action']))
+        except:
+            pass
+
+    if not results:
+        bot_tg.send_message(call.message.chat.id, "Не удалось оценить (нет фундаментала).")
+        return
+
+    avg_score = sum(r[1] for r in results) / len(results)
+    text = f"🧠 <b>Фундаментальный балл портфеля: {avg_score:.1f}/100</b>\n\n"
+    for t, sc, act in sorted(results, key=lambda x: x[1], reverse=True):
+        text += f"  • <b>{t}</b>: {act} ({sc})\n"
+
+    bot_tg.send_message(call.message.chat.id, text, parse_mode='HTML', reply_markup=invest_chart_keyboard())
