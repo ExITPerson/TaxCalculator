@@ -4,7 +4,7 @@ import html
 from bot.instance import bot_tg
 from bot.decorator import require_role_cb, Role
 from bot.keyboard import back_to_menu, assets_menu, score_result_keyboard, top_assets_keyboard
-from database.db import Session
+from database.db import Session, CachedScoreDB
 from database.crud import CachedScoreCrud
 from database.instrument_crud import InstrumentCrud
 from invest.scoring.final_verdict import final_verdict
@@ -186,28 +186,221 @@ def process_compare(message):
 @bot_tg.callback_query_handler(func=lambda c: c.data == 'asset_top')
 @require_role_cb(Role.ADMIN)
 def cb_asset_top(call):
-    bot_tg.edit_message_text("🏆 Выбери категорию топа:", call.message.chat.id, call.message.message_id,
-                             reply_markup=top_assets_keyboard('stock', 'score'))
+    bot_tg.edit_message_text(
+        "🏆 <b>Топ активов</b>\n\nВыбери категорию:",
+        call.message.chat.id, call.message.message_id,
+        parse_mode='HTML', reply_markup=top_assets_keyboard()
+    )
     bot_tg.answer_callback_query(call.id)
 
 
-@bot_tg.callback_query_handler(func=lambda c: c.data.startswith('top_stock_'))
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'top_stocks_15')
 @require_role_cb(Role.ADMIN)
-def cb_top_stocks(call):
-    bot_tg.answer_callback_query(call.id, "Ищу лучшие идеи...")
+def cb_top_stocks_15(call):
+    bot_tg.answer_callback_query(call.id, "⏳ Ищу лучшие акции...")
 
     with Session() as s:
-        from database.db import CachedScoreDB
-        rows = s.query(CachedScoreDB).filter_by(score_type='stock').order_by(CachedScoreDB.score_value.desc()).limit(
-            5).all()
+        # Берем Топ-15 акций с вердиктом BUY, затем HOLD
+        rows = s.query(CachedScoreDB).filter(
+            CachedScoreDB.score_type == 'stock'
+        ).order_by(
+            CachedScoreDB.score_value.desc()
+        ).limit(15).all()
 
     if not rows:
-        bot_tg.send_message(call.message.chat.id, "Кэш пуст. Запустите скрипт refresh_scores.py")
+        bot_tg.send_message(call.message.chat.id,
+                            "⚠️ Кэш пуст. Планировщик обновит данные ночью (или запустите refresh_scores.py).")
         return
 
-    text = "🏆 <b>Топ-5 акций по Score</b>\n\n"
-    for r in rows:
-        text += f"  • <b>{html.escape(r.ticker)}</b>: {html.escape(r.verdict)} ({r.score_value})\n"
+    text = "🏆 <b>Топ-15 акций по Score</b>\n\n"
+    for i, r in enumerate(rows, 1):
+        emoji = {"BUY": "🟢", "HOLD": "🟡", "AVOID": "🔴", "STRONG_AVOID": "⛔"}.get(r.verdict, "⚪")
+        text += f"{i}. {emoji} <b>{html.escape(r.ticker)}</b> — {html.escape(r.verdict)} (<code>{r.score_value:.0f}</code>)\n"
 
-    bot_tg.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='HTML',
-                             reply_markup=assets_menu())
+    text += "\n<i>* Чтобы получить полную оценку, нажмите «Оценить акцию»</i>"
+
+    bot_tg.edit_message_text(
+        text, call.message.chat.id, call.message.message_id,
+        parse_mode='HTML', reply_markup=top_assets_keyboard()
+    )
+
+
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'top_bonds_20')
+@require_role_cb(Role.ADMIN)
+def cb_top_bonds_20(call):
+    bot_tg.answer_callback_query(call.id, "⏳ Ищу лучшие облигации...")
+
+    with Session() as s:
+        # Для облигаций score_value = 0 (мы его не считаем), поэтому сортируем по вердикту
+        # Сначала BUY, потом HOLD, внутри по алфавиту
+        rows = s.query(CachedScoreDB).filter(
+            CachedScoreDB.score_type == 'bond'
+        ).order_by(
+            # Сортировка по вердикту: BUY -> HOLD -> AVOID
+            CachedScoreDB.verdict.asc(),
+            CachedScoreDB.ticker.asc()
+        ).limit(20).all()
+
+    if not rows:
+        bot_tg.send_message(call.message.chat.id, "⚠️ Кэш пуст. Запустите refresh_scores.py.")
+        return
+
+    text = "🏆 <b>Топ-20 облигаций</b>\n\n"
+    for i, r in enumerate(rows, 1):
+        emoji = {"BUY": "🟢", "HOLD": "🟡", "AVOID": "🔴"}.get(r.verdict, "⚪")
+        text += f"{i}. {emoji} <b>{html.escape(r.ticker)}</b> — {html.escape(r.verdict)}\n"
+
+    text += "\n<i>* Для детального анализа нажмите «Оценить облигацию»</i>"
+
+    bot_tg.edit_message_text(
+        text, call.message.chat.id, call.message.message_id,
+        parse_mode='HTML', reply_markup=top_assets_keyboard()
+    )
+
+
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'top_allocations')
+@require_role_cb(Role.ADMIN)
+def cb_top_allocations(call):
+    bot_tg.answer_callback_query(call.id, "⚖️ Считаю рекомендуемые доли...")
+
+    with Session() as s:
+        # Берем Топ-5 акций с оценкой выше 0
+        stocks = s.query(CachedScoreDB).filter(
+            CachedScoreDB.score_type == 'stock',
+            CachedScoreDB.score_value > 0
+        ).order_by(CachedScoreDB.score_value.desc()).limit(5).all()
+
+        # Берем Топ-5 облигаций с вердиктом BUY
+        bonds = s.query(CachedScoreDB).filter(
+            CachedScoreDB.score_type == 'bond',
+            CachedScoreDB.verdict == 'BUY'
+        ).limit(5).all()
+
+    if not stocks and not bonds:
+        bot_tg.send_message(call.message.chat.id, "⚠️ Нет данных для рекомендаций. Обновите кэш.")
+        return
+
+    text = "⚖️ <b>Рекомендуемые доли в портфеле</b>\n\n"
+
+    if stocks:
+        text += "📈 <b>Акции</b> (по весу Score):\n"
+        total_score = sum(r.score_value for r in stocks)
+        for r in stocks:
+            weight = (r.score_value / total_score) * 100 if total_score > 0 else 0
+            text += f"  • <b>{html.escape(r.ticker)}</b>: {weight:.1f}% (score {r.score_value:.0f})\n"
+
+        text += "\n"
+
+    if bonds:
+        text += "📜 <b>Облигации</b> (равные доли):\n"
+        weight_bond = 100.0 / len(bonds)
+        for r in bonds:
+            text += f"  • <b>{html.escape(r.ticker)}</b>: {weight_bond:.1f}%\n"
+
+    if not bonds:
+        text += "📜 <b>Облигации</b>: <i>Нет надежных идей (BUY)</i>\n"
+
+    text += (
+        "\n💡 <b>Совет:</b>\n"
+        "Распределите 100% капитала между этими бумагами.\n"
+        "Например: 40% в акции (по 8% на каждую из 5) и 60% в облигации (по 12% на каждую из 5)."
+    )
+
+    bot_tg.edit_message_text(
+        text, call.message.chat.id, call.message.message_id,
+        parse_mode='HTML', reply_markup=top_assets_keyboard()
+    )
+
+# ============ РЕДАКТИРОВАНИЕ РЕЙТИНГОВ ОБЛИГАЦИЙ ============
+
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'asset_bond_ratings')
+@require_role_cb(Role.ADMIN)
+def cb_asset_bond_ratings(call):
+    msg = bot_tg.edit_message_text(
+        "⚙️ <b>Настройка рейтингов облигаций</b>\n\n"
+        "Введи <b>ISIN</b> облигации, для которой хочешь задать или обновить рейтинг\n"
+        "<i>(например, RU000A10EJR5)</i>:\n\n"
+        "Или напиши <i>«отмена»</i>, чтобы выйти.",
+        call.message.chat.id, call.message.message_id,
+        parse_mode='HTML', reply_markup=back_to_menu()
+    )
+    bot_tg.answer_callback_query(call.id)
+    bot_tg.register_next_step_handler(msg, process_bond_rating_isin)
+
+
+def process_bond_rating_isin(message):
+    text = (message.text or '').strip().upper()
+    if text.lower() in ('отмена', 'cancel', '/cancel'):
+        bot_tg.send_message(message.chat.id, "Отменено.", reply_markup=assets_menu())
+        return
+
+    if not text:
+        bot_tg.send_message(message.chat.id, "⚠️ Пустой ввод. Попробуй снова.")
+        return
+
+    # Проверяем, есть ли облигация в БД
+    with Session() as s:
+        crud = InstrumentCrud(s)
+        info = crud.get_by_ticker(text)
+
+        if not info:
+            # Если нет в БД по тикеру, пробуем найти через API
+            figi = ensure_bond_in_db(text, save=True)
+            if not figi:
+                bot_tg.send_message(message.chat.id,
+                                    f"⚠️ Облигация <b>{html.escape(text)}</b> не найдена. Проверь ISIN.")
+                return
+            # После ensure_bond_in_db она должна появиться в БД
+            info = crud.get(figi)
+
+        if not info:
+            bot_tg.send_message(message.chat.id, "⚠️ Не удалось найти облигацию в БД после запроса к API.")
+            return
+
+        # Сохраняем FIGI в контексте, чтобы знать, что обновлять
+        figi = info.figi
+        current_rating = info.credit_rating or "не задан"
+
+    msg = bot_tg.send_message(
+        message.chat.id,
+        f"📜 <b>{html.escape(info.ticker or text)}</b>\n"
+        f"Текущий рейтинг: <b>{html.escape(current_rating)}</b>\n\n"
+        f"Введи новый рейтинг <i>(например, AAA, AA+, BBB, BB-)</i>:\n"
+        f"Или напиши <i>«отмена»</i>.",
+        parse_mode='HTML'
+    )
+    # Передаем figi в следующий шаг через лямбду/аргумент.
+    # В telebot можно передать доп. аргументы в register_next_step_handler
+    bot_tg.register_next_step_handler(msg, process_bond_rating_value, figi=figi)
+
+
+def process_bond_rating_value(message, figi):
+    text = (message.text or '').strip().upper()
+    if text.lower() in ('отмена', 'cancel', '/cancel'):
+        bot_tg.send_message(message.chat.id, "Отменено.", reply_markup=assets_menu())
+        return
+
+    # Простейшая валидация: рейтинг должен содержать буквы A, B, C
+    if not any(c in text for c in ('A', 'B', 'C')):
+        bot_tg.send_message(message.chat.id, "⚠️ Некорректный формат рейтинга. Попробуй снова (или «отмена»).")
+        bot_tg.register_next_step_handler(message, process_bond_rating_value, figi=figi)
+        return
+
+    # Сохраняем рейтинг в БД
+    with Session() as s:
+        crud = InstrumentCrud(s)
+        info = crud.get(figi)
+        if not info:
+            bot_tg.send_message(message.chat.id, "⚠️ Облигация исчезла из БД. Отмена.")
+            return
+
+        info.credit_rating = text
+        s.commit()
+
+    bot_tg.send_message(
+        message.chat.id,
+        f"✅ Рейтинг для <b>{html.escape(info.ticker or figi)}</b> обновлен на <b>{html.escape(text)}</b>.\n\n"
+        f"Теперь можно оценить облигацию через меню «📜 Оценить облигацию».",
+        parse_mode='HTML',
+        reply_markup=assets_menu()
+    )

@@ -109,6 +109,19 @@ class InstrumentCrud:
         age = datetime.utcnow() - info.updated_at
         return age > timedelta(hours=ttl_hours)
 
+    def get_stale_bonds(self, ttl_hours: int = 24) -> list[str]:
+        """Возвращает список FIGI облигаций, которые не обновлялись > ttl_hours."""
+        cutoff = datetime.utcnow() - timedelta(hours=ttl_hours)
+        rows = (
+            self.__session.query(InstrumentInfoDB.figi)
+            .filter(
+                InstrumentInfoDB.instrument_type == 'bond',
+                InstrumentInfoDB.updated_at < cutoff
+            )
+            .all()
+        )
+        return [r[0] for r in rows if r[0]]
+
     def get_by_ticker(self, ticker: str) -> InstrumentInfoDB | None:
         """Ищет инструмент по ticker (ISIN)."""
         return (

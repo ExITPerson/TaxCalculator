@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from database.db import Session
+from invest.bond_resolver import ensure_bond_in_db
 from database.crud import CachedScoreCrud
 from database.instrument_crud import InstrumentCrud
 from invest.scoring.final_verdict import final_verdict
@@ -62,3 +63,17 @@ def refresh_all():
             time.sleep(1)
 
     logger.info("=== Обновление кэша оценок завершено ===")
+
+    logger.info("Обновление данных об облигациях (TTL 24ч)...")
+    with Session() as s:
+        instr_crud = InstrumentCrud(s)
+        stale_bonds = instr_crud.get_stale_bonds(ttl_hours=24)
+
+        for i, figi in enumerate(stale_bonds, 1):
+            logger.info(f"[{i}/{len(stale_bonds)}] Обновление облигации {figi}...")
+            try:
+                # force_update=True заставит скрипт сходить в API
+                ensure_bond_in_db(figi, save=True, force_update=True)
+                time.sleep(1)  # Пауза, чтобы не превысить лимиты API
+            except Exception as e:
+                logger.error(f"Ошибка обновления облигации {figi}: {e}")

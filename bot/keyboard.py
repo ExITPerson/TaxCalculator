@@ -141,8 +141,19 @@ def assets_menu() -> types.InlineKeyboardMarkup:
     markup.add(
         types.InlineKeyboardButton('⚔️ Сравнить акции', callback_data='asset_compare'),
         types.InlineKeyboardButton('🏆 Топ идей', callback_data='asset_top'),
+        types.InlineKeyboardButton('⚙️ Рейтинги облигаций', callback_data='asset_bond_ratings')
     )
     markup.add(types.InlineKeyboardButton('⬅️ Назад', callback_data='back_to_main'))
+    return markup
+
+def top_assets_keyboard() -> types.InlineKeyboardMarkup:
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton('📈 Топ-15 акций', callback_data='top_stocks_15'),
+        types.InlineKeyboardButton('📜 Топ-20 облигаций', callback_data='top_bonds_20'),
+        types.InlineKeyboardButton('⚖️ Рекомендуемые доли', callback_data='top_allocations'),
+        types.InlineKeyboardButton('⬅️ Назад', callback_data='menu_assets'),
+    )
     return markup
 
 
@@ -152,21 +163,4 @@ def score_result_keyboard() -> types.InlineKeyboardMarkup:
         types.InlineKeyboardButton('🔄 Обновить данные', callback_data='refresh_current_score'),
         types.InlineKeyboardButton('⬅️ К оценке', callback_data='menu_assets'),
     )
-    return markup
-
-
-def top_assets_keyboard(type_: str, metric: str) -> types.InlineKeyboardMarkup:
-    markup = types.InlineKeyboardMarkup(row_width=2)
-
-    if type_ == 'stock':
-        markup.add(
-            types.InlineKeyboardButton('По Score', callback_data='top_stock_score'),
-            types.InlineKeyboardButton('По P/E', callback_data='top_stock_pe'),
-        )
-    else:
-        markup.add(
-            types.InlineKeyboardButton('По YTM', callback_data='top_bond_ytm'),
-            types.InlineKeyboardButton('По Рейтингу', callback_data='top_bond_rating'),
-        )
-    markup.add(types.InlineKeyboardButton('⬅️ Назад', callback_data='menu_assets'))
     return markup
