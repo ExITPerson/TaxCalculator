@@ -393,3 +393,177 @@ def build_sectors_pie_chart(output_path: str | None = None,
     plt.close(fig)
 
     return output_path
+
+
+# ============================================================
+# 5. Тепловая карта P&L (Treemap)
+# ============================================================
+def build_pnl_treemap(output_path: str | None = None, account_id: str | None = None) -> str:
+    """Тепловая карта P&L по акциям (размер = стоимость, цвет = P&L)."""
+    import squarify
+    from invest.portfolio_client import TInvestPortfolioClient, parse_portfolio
+    from config.settings import ACCOUNTS_ID
+    from database.db import Session
+    from database.instrument_crud import InstrumentCrud
+
+    if output_path is None:
+        output_path = str(DATA_DIR / 'pnl_treemap.png')
+
+    accounts = [account_id] if account_id else ACCOUNTS_ID
+    positions = []
+
+    with TInvestPortfolioClient() as client:
+        for acc in accounts:
+            raw = client.fetch_portfolio(acc)
+            if not raw: continue
+            p = parse_portfolio(raw)
+            for pos in p['positions']:
+                qty = pos['quantity']
+                price = pos['current_price']
+                if qty <= 0 or price <= 0: continue
+
+                value = qty * price
+                pnl = pos.get('expected_yield', 0)
+
+                positions.append({
+                    'figi': pos['figi'],
+                    'api_ticker': pos.get('ticker'),
+                    'value': value,
+                    'pnl': pnl,
+                    'pnl_pct': (pnl / (value - pnl)) * 100 if (value - pnl) > 0 else 0
+                })
+
+    if not positions:
+        raise ValueError("Нет позиций для графика")
+
+    # --- ДОСТАЕМ ТИКЕРЫ ИЗ БД ---
+    with Session() as s:
+        crud = InstrumentCrud(s)
+        for p in positions:
+            info = crud.get(p['figi'])
+            if info and info.ticker:
+                p['ticker'] = info.ticker
+            elif p['api_ticker']:
+                p['ticker'] = p['api_ticker']
+            else:
+                p['ticker'] = p['figi'][:6]
+
+    # Сортируем по стоимости
+    positions.sort(key=lambda x: x['value'], reverse=True)
+
+    fig, ax = plt.subplots(figsize=(12, 8))
+
+    sizes = [p['value'] for p in positions]
+    labels = []
+    colors = []
+
+    import matplotlib.cm as cm
+    import matplotlib.colors as mcolors
+
+    # Нормализация цветов от красного (-10%) до зеленого (+10%)
+    norm = mcolors.Normalize(vmin=-10, vmax=10)
+    cmap = plt.get_cmap('RdYlGn')
+
+    for p in positions:
+        pct = p['pnl_pct']
+        # Показываем тикер и процент P&L
+        labels.append(f"{p['ticker']}\n{pct:+.1f}%")
+        colors.append(cmap(norm(pct)))
+
+    squarify.plot(sizes=sizes, label=labels, color=colors, alpha=0.8, ax=ax,
+                  text_kwargs={'fontsize': 9, 'weight': 'bold'})
+
+    ax.axis('off')
+    ax.set_title('Тепловая карта P&L портфеля (размер = стоимость, цвет = P&L)', fontsize=14)
+
+    plt.tight_layout()
+    fig.savefig(output_path, dpi=120, bbox_inches='tight')
+    plt.close(fig)
+    return output_path
+
+
+# ============================================================
+# 6. Детальная структура (Pie по бумагам)
+# ============================================================
+def build_portfolio_detailed_pie(output_path: str | None = None, account_id: str | None = None) -> str:
+    """Круговая диаграмма по конкретным бумагам."""
+    from invest.portfolio_client import TInvestPortfolioClient, parse_portfolio
+    from config.settings import ACCOUNTS_ID
+    from database.db import Session
+    from database.instrument_crud import InstrumentCrud
+
+    if output_path is None:
+        output_path = str(DATA_DIR / 'portfolio_detailed_pie.png')
+
+    accounts = [account_id] if account_id else ACCOUNTS_ID
+    items = []
+
+    with TInvestPortfolioClient() as client:
+        for acc in accounts:
+            raw = client.fetch_portfolio(acc)
+            if not raw: continue
+            p = parse_portfolio(raw)
+            for pos in p['positions']:
+                val = pos['quantity'] * pos['current_price']
+                if val > 0:
+                    items.append({
+                        'figi': pos['figi'],
+                        'value': val,
+                        'api_ticker': pos.get('ticker')
+                    })
+
+    if not items:
+        raise ValueError("Портфель пуст")
+
+    # Достаем тикеры из БД
+    with Session() as s:
+        crud = InstrumentCrud(s)
+        for item in items:
+            info = crud.get(item['figi'])
+            if info and info.ticker:
+                item['ticker'] = info.ticker
+            elif item['api_ticker']:
+                item['ticker'] = item['api_ticker']
+            else:
+                item['ticker'] = item['figi'][:6]  # fallback
+
+    # Группируем мелкие позиции (< 2% от общего) в "Прочее"
+    total = sum(item['value'] for item in items)
+    items.sort(key=lambda x: x['value'], reverse=True)
+
+    main_items = []
+    other_val = 0
+
+    for item in items:
+        if item['value'] / total > 0.02:
+            main_items.append((item['ticker'], item['value']))
+        else:
+            other_val += item['value']
+
+    if other_val > 0:
+        main_items.append(("Прочее (мелкие)", other_val))
+
+    labels = [t for t, v in main_items]
+    sizes = [v for t, v in main_items]
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    wedges, texts, autotexts = ax.pie(
+        sizes, labels=labels, autopct='%1.1f%%',
+        startangle=90, pctdistance=0.85,
+        wedgeprops={'edgecolor': 'white', 'linewidth': 2},
+        textprops={'fontsize': 9}
+    )
+
+    # Делаем "бублик"
+    centre_circle = plt.Circle((0, 0), 0.70, fc='white')
+    fig.gca().add_artist(centre_circle)
+
+    ax.text(0, 0, f'{total:,.0f}\n₽', ha='center', va='center', fontsize=14, fontweight='bold')
+    ax.axis('equal')
+    ax.set_title('Структура по бумагам', fontsize=14, pad=20)
+
+    plt.tight_layout()
+    fig.savefig(output_path, dpi=120, bbox_inches='tight')
+    plt.close(fig)
+    return output_path

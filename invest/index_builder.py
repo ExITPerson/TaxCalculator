@@ -83,7 +83,7 @@ def build_daily_flows(session, date_from: date, date_to: date) -> dict:
             func.coalesce(func.sum(InvestOperationDB.payment_amount), 0),
         )
         .filter(
-            InvestOperationDB.kind.in_(['deposit', 'withdraw']),
+            InvestOperationDB.kind.in_(['deposit', 'withdraw', 'coupon', 'dividend']),
             InvestOperationDB.date >= datetime.combine(date_from, datetime.min.time()),
             InvestOperationDB.date <= datetime.combine(date_to, datetime.max.time()),
             or_(

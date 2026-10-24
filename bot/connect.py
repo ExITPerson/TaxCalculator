@@ -1,6 +1,12 @@
+# connect.py
 import logging
 import os
 import sys
+import time
+import threading
+from datetime import datetime
+
+import schedule
 
 from telebot.handler_backends import SkipHandler
 
@@ -13,10 +19,13 @@ if project_root not in sys.path:
 from bot.instance import bot_tg
 from database.db import Session, engine, Base
 from database.crud import UserCrud
-import database.db  # noqa: F401  — регистрирует все модели в Base.metadata
+import database.db  # noqa: F401 — регистрирует все модели в Base.metadata
 
+# --- Задачи для планировщика ---
+from scripts.daily_digest import send_digest
+from scripts.refresh_scores import refresh_all
 
-# --- Логирование: stdout + файл рядом с проектом (не в CWD) ---
+# --- Логирование: stdout + файл ---
 LOG_PATH = os.path.join(project_root, "bot.log")
 
 logging.basicConfig(
@@ -31,8 +40,7 @@ logger = logging.getLogger("bot_tg")
 logging.getLogger("urllib3").setLevel(logging.ERROR)
 logging.getLogger("telebot").setLevel(logging.WARNING)
 
-
-# --- Создаём таблицы (users, counterparty, operations) ---
+# --- Создаём таблицы ---
 try:
     Base.metadata.create_all(engine)
     logger.info("DB schema OK")
@@ -56,10 +64,48 @@ def track_user(bot_instance, message):
             raise SkipHandler()
 
 
-# --- Хендлеры (регистрируются на bot_tg при импорте) ---
-from bot.handlers import common, moderator, admin, invest  # noqa: E402, F401
+# --- Хендлеры ---
+from bot.handlers import common, moderator, admin, invest, assets  # noqa: E402, F401
 
 
+# ============================================================
+# ПЛАНИРОВЩИК ЗАДАЧ (Фоновый поток)
+# ============================================================
+def run_scheduler():
+    """Фоновый поток для выполнения задач по расписанию."""
+    logger.info("Планировщик задач запущен")
+
+    # ВАЖНО: Время в schedule указывается в часовом поясе сервера (обычно UTC).
+    # 06:00 UTC = 09:00 МСК
+    schedule.every().day.at("06:00").do(send_digest)
+
+    # 00:00 UTC = 03:00 МСК (обновление оценок, пока вы спите)
+    schedule.every().day.at("00:00").do(refresh_all)
+
+    # (Опционально) Можно добавить тестовое время, чтобы проверить работу:
+    # schedule.every().day.at("12:30").do(send_digest)
+
+    while True:
+        try:
+            schedule.run_pending()
+        except Exception as e:
+            logger.error(f"Ошибка в планировщике: {e}", exc_info=True)
+        time.sleep(60)  # Проверяем расписание раз в минуту
+
+
+# ============================================================
+# ЗАПУСК БОТА
+# ============================================================
 if __name__ == "__main__":
     logger.info("Бот запущен")
+
+    # Запускаем планировщик в фоне
+    # daemon=True означает, что поток завершится вместе с основным процессом
+    scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+    scheduler_thread.start()
+
+    # Пауза, чтобы старый процесс успел умереть (защита от 409)
+    time.sleep(3)
+
+    # Запускаем бота
     bot_tg.infinity_polling()

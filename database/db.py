@@ -308,3 +308,14 @@ def day_expr(col):
     if IS_POSTGRES:
         return func.date_trunc('day', col).cast(Date)
     return func.date(col)
+
+
+class CachedScoreDB(Base):
+    __tablename__ = 'cached_scores'
+
+    ticker = Column(String, primary_key=True)
+    score_type = Column(String, primary_key=True)  # 'stock' или 'bond'
+    score_value = Column(Numeric(10, 2))
+    verdict = Column(String)
+    text_result = Column(String)  # Сохраняем готовый HTML-текст для бота
+    updated_at = Column(DateTime, default=datetime.utcnow)
