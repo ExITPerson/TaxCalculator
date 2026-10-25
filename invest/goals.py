@@ -1,20 +1,17 @@
-"""Целевые ориентиры по доходности."""
-from datetime import date
-
+# invest/goals.py
 from database.db import Session
 from database.snapshot_crud import SnapshotCrud
-
-
-# Целевая доходность на год (%)
-TARGET_ANNUAL_RETURN = 15.0
-
+from database.crud import BotSettingsCrud
+from datetime import date
 
 def build_goals_report(account_id: str = 'all') -> dict:
     """
     Прогресс к цели: сколько уже набрано, сколько осталось.
+    Цель берется из БД (настройки бота).
     """
     with Session() as s:
         snapshots = SnapshotCrud(s).get_snapshots(account_id)
+        target = BotSettingsCrud(s).get_float('target_annual_return', 15.0)
 
     if not snapshots:
         return {'error': 'Нет snapshots'}
@@ -27,7 +24,6 @@ def build_goals_report(account_id: str = 'all') -> dict:
     days_left = (end_of_year - today).days
 
     # Требуемая доходность от текущего уровня
-    target = TARGET_ANNUAL_RETURN
     remaining = target - current_return
 
     if days_left <= 0:
