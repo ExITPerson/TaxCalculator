@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from clients.normalized import NormalizedOperation, OperationCategory
 from database.db import (
     OperationsDB, CounterpartyDB, Role, UserDB,
-    CashWithdrawalDB, InvestOperationDB, BalanceAdjustmentDB, CachedScoreDB,
+    CashWithdrawalDB, InvestOperationDB, BalanceAdjustmentDB, CachedScoreDB, BotSettingsDB,
 )
 from invest.models import BaseOperation
 
@@ -666,3 +666,43 @@ class CachedScoreCrud:
                 text_result=text_result
             ))
         self.__session.commit()
+
+
+class BotSettingsCrud:
+    def __init__(self, session):
+        self.__session = session
+
+    def get(self, key: str, default: str | None = None) -> str | None:
+        row = self.__session.query(BotSettingsDB).filter_by(key=key).first()
+        return row.value if row else default
+
+    def set(self, key: str, value: str):
+        row = self.__session.query(BotSettingsDB).filter_by(key=key).first()
+        if row:
+            row.value = value
+            row.updated_at = datetime.utcnow()
+        else:
+            self.__session.add(BotSettingsDB(key=key, value=value))
+        self.__session.commit()
+
+    def get_float(self, key: str, default: float = 0.0) -> float:
+        val = self.get(key)
+        try:
+            return float(val) if val else default
+        except (ValueError, TypeError):
+            return default
+
+    def get_target_allocation(self) -> dict[str, float]:
+        """Возвращает словарь целевых долей (например, {'Акции': 0.3, 'Облигации': 0.6, 'ETF': 0.1})"""
+        import json
+        val = self.get('target_allocation')
+        if not val:
+            return {'Акции': 0.35, 'Облигации': 0.55, 'Фонды': 0.10}  # Дефолт
+        try:
+            return json.loads(val)
+        except Exception:
+            return {'Акции': 0.35, 'Облигации': 0.55, 'Фонды': 0.10}
+
+    def set_target_allocation(self, allocation: dict):
+        import json
+        self.set('target_allocation', json.dumps(allocation))

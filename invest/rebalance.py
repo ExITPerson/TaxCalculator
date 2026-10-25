@@ -1,31 +1,31 @@
-"""Рекомендации по ребалансировке портфеля."""
+# invest/rebalance.py
 import logging
-from pathlib import Path
-
 from config.settings import ACCOUNTS_ID
 from invest.portfolio_client import TInvestPortfolioClient, parse_portfolio
+from database.db import Session
+from database.crud import BotSettingsCrud
+from database.instrument_crud import InstrumentCrud
 
 logger = logging.getLogger(__name__)
 
-
-# Целевые доли (можно вынести в .env или config)
-TARGET_ALLOCATION = {
-    'Акции': 0.30,
-    'Облигации': 0.60,
-    'ETF': 0.10,
-}
-
-# Порог отклонения, после которого рекомендуем ребалансировку (%)
 REBALANCE_THRESHOLD = 5.0
 
 
 def build_rebalance_recommendations(account_id: str | None = None) -> dict:
     """
     Считает отклонения от целевых долей и даёт рекомендации.
+    Учитывает Акции, Облигации и Фонды (ETF).
     """
     accounts = [account_id] if account_id else ACCOUNTS_ID
 
-    totals = {'Акции': 0.0, 'Облигации': 0.0, 'ETF': 0.0}
+    # Читаем цели из БД
+    with Session() as s:
+        target_allocation = BotSettingsCrud(s).get_target_allocation()
+        # Достаем кэш инструментов, чтобы понять, что такое ETF/Фонд
+        instr_crud = InstrumentCrud(s)
+        all_instr = instr_crud.get_all()
+
+    totals = {'Акции': 0.0, 'Облигации': 0.0, 'Фонды': 0.0}
 
     with TInvestPortfolioClient() as client:
         for acc in accounts:
@@ -33,9 +33,25 @@ def build_rebalance_recommendations(account_id: str | None = None) -> dict:
             if not raw:
                 continue
             p = parse_portfolio(raw)
+
+            # Суммируем по типам из API (общая стоимость)
             totals['Акции'] += p.get('total_amount_shares', 0.0)
             totals['Облигации'] += p.get('total_amount_bonds', 0.0)
-            totals['ETF'] += p.get('total_amount_etf', 0.0)
+            totals['Фонды'] += p.get('total_amount_etf', 0.0)
+
+            # Если API не разделяет ETF, пробуем найти их через позиции
+            for pos in p['positions']:
+                figi = pos['figi']
+                val = pos['quantity'] * pos['current_price']
+                if val <= 0:
+                    continue
+                # Смотрим в БД, что это за инструмент
+                info = all_instr.get(figi)
+                if info and info.instrument_type == 'etf':
+                    # Если API уже посчитал это в total_amount_etf,
+                    # то мы можем задвоить. Но для надежности лучше
+                    # использовать логику API.
+                    pass
 
     total = sum(totals.values())
     if total == 0:
@@ -44,7 +60,7 @@ def build_rebalance_recommendations(account_id: str | None = None) -> dict:
     current = {k: v / total for k, v in totals.items()}
 
     recommendations = []
-    for asset, target_pct in TARGET_ALLOCATION.items():
+    for asset, target_pct in target_allocation.items():
         current_pct = current.get(asset, 0.0)
         deviation = (current_pct - target_pct) * 100
 

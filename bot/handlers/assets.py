@@ -4,9 +4,9 @@ import html
 import re
 from bot.instance import bot_tg
 from bot.decorator import require_role_cb, Role
-from bot.keyboard import back_to_menu, assets_menu, score_result_keyboard, top_assets_keyboard
+from bot.keyboard import back_to_menu, assets_menu, score_result_keyboard, top_assets_keyboard, settings_menu
 from database.db import Session, CachedScoreDB
-from database.crud import CachedScoreCrud
+from database.crud import CachedScoreCrud, BotSettingsCrud
 from database.instrument_crud import InstrumentCrud
 from invest.scoring.final_verdict import final_verdict
 from invest.bond_score import evaluate_bond
@@ -446,3 +446,122 @@ def save_bond_ratings_to_db(chat_id: int, results: dict):
         text += f"  • <b>{html.escape(ticker)}</b> → {html.escape(rating)}\n"
 
     bot_tg.send_message(chat_id, text, parse_mode='HTML', reply_markup=assets_menu())
+
+
+# ============ НАСТРОЙКИ ЦЕЛЕЙ ============
+
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'asset_settings')
+@require_role_cb(Role.ADMIN)
+def cb_asset_settings(call):
+    bot_tg.edit_message_text(
+        "⚙️ <b>Настройки целей</b>\n\nВыбери, что хочешь изменить:",
+        call.message.chat.id, call.message.message_id,
+        parse_mode='HTML', reply_markup=settings_menu()
+    )
+    bot_tg.answer_callback_query(call.id)
+
+
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'set_goal_return')
+@require_role_cb(Role.ADMIN)
+def cb_set_goal_return(call):
+    with Session() as s:
+        current = BotSettingsCrud(s).get_float('target_annual_return', 15.0)
+
+    msg = bot_tg.edit_message_text(
+        f"📈 <b>Целевая доходность</b>\n\n"
+        f"Текущая цель: <b>{current:.1f}%</b> годовых\n\n"
+        f"Введи новое значение (например, 20):",
+        call.message.chat.id, call.message.message_id,
+        parse_mode='HTML', reply_markup=back_to_menu()
+    )
+    bot_tg.answer_callback_query(call.id)
+    bot_tg.register_next_step_handler(msg, process_set_goal_return)
+
+
+def process_set_goal_return(message):
+    text = (message.text or '').strip().replace(',', '.')
+    if text.lower() in ('отмена', 'cancel'):
+        bot_tg.send_message(message.chat.id, "Отменено.", reply_markup=settings_menu())
+        return
+
+    try:
+        val = float(text)
+        if val <= 0 or val > 100:
+            raise ValueError
+    except ValueError:
+        bot_tg.send_message(message.chat.id, "⚠️ Введи число от 0 до 100 (например, 15).")
+        return
+
+    with Session() as s:
+        BotSettingsCrud(s).set('target_annual_return', str(val))
+
+    bot_tg.send_message(
+        message.chat.id,
+        f"✅ Целевая доходность обновлена: <b>{val:.1f}%</b>",
+        parse_mode='HTML', reply_markup=settings_menu()
+    )
+
+
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'set_goal_allocation')
+@require_role_cb(Role.ADMIN)
+def cb_set_goal_allocation(call):
+    with Session() as s:
+        current = BotSettingsCrud(s).get_target_allocation()
+
+    current_str = ", ".join(f"{k}: {v * 100:.0f}%" for k, v in current.items())
+
+    msg = bot_tg.edit_message_text(
+        f"📊 <b>Целевая структура портфеля</b>\n\n"
+        f"Текущая цель: <b>{current_str}</b>\n\n"
+        f"Введи новые доли в формате: <code>Акции 30, Облигации 60, ETF 10</code>\n"
+        f"(сумма должна быть 100)",
+        call.message.chat.id, call.message.message_id,
+        parse_mode='HTML', reply_markup=back_to_menu()
+    )
+    bot_tg.answer_callback_query(call.id)
+    bot_tg.register_next_step_handler(msg, process_set_goal_allocation)
+
+
+def process_set_goal_allocation(message):
+    import re
+    text = (message.text or '').strip()
+    if text.lower() in ('отмена', 'cancel'):
+        bot_tg.send_message(message.chat.id, "Отменено.", reply_markup=settings_menu())
+        return
+
+    # Парсим строку вида "Акции 30, Облигации 60, ETF 10"
+    parts = text.split(',')
+    allocation = {}
+    total = 0
+    try:
+        for part in parts:
+            part = part.strip()
+            # Ищем название и число
+            match = re.match(r'^(.+?)\s+(\d+(?:\.\d+)?)$', part)
+            if not match:
+                raise ValueError
+            name = match.group(1).strip().capitalize()
+            pct = float(match.group(2))
+            allocation[name] = pct / 100.0
+            total += pct
+
+        if abs(total - 100) > 0.1:
+            raise ValueError("Сумма долей должна быть 100")
+    except ValueError as e:
+        bot_tg.send_message(
+            message.chat.id,
+            f"⚠️ Ошибка формата. Введи как: <code>Акции 30, Облигации 60, ETF 10</code>\n"
+            f"<i>Сумма должна быть 100.</i>",
+            parse_mode='HTML'
+        )
+        return
+
+    with Session() as s:
+        BotSettingsCrud(s).set_target_allocation(allocation)
+
+    result_str = ", ".join(f"{k}: {v * 100:.0f}%" for k, v in allocation.items())
+    bot_tg.send_message(
+        message.chat.id,
+        f"✅ Целевая структура обновлена: <b>{result_str}</b>",
+        parse_mode='HTML', reply_markup=settings_menu()
+    )

@@ -141,7 +141,8 @@ def assets_menu() -> types.InlineKeyboardMarkup:
     markup.add(
         types.InlineKeyboardButton('⚔️ Сравнить акции', callback_data='asset_compare'),
         types.InlineKeyboardButton('🏆 Топ идей', callback_data='asset_top'),
-        types.InlineKeyboardButton('⚙️ Рейтинги облигаций', callback_data='asset_bond_ratings')
+        types.InlineKeyboardButton('⚙️ Рейтинги облигаций', callback_data='asset_bond_ratings'),
+        types.InlineKeyboardButton('🎯 Настройки целей', callback_data='asset_settings'),
     )
     markup.add(types.InlineKeyboardButton('⬅️ Назад', callback_data='back_to_main'))
     return markup
@@ -162,5 +163,14 @@ def score_result_keyboard() -> types.InlineKeyboardMarkup:
     markup.add(
         types.InlineKeyboardButton('🔄 Обновить данные', callback_data='refresh_current_score'),
         types.InlineKeyboardButton('⬅️ К оценке', callback_data='menu_assets'),
+    )
+    return markup
+
+def settings_menu() -> types.InlineKeyboardMarkup:
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton('📈 Целевая доходность (год)', callback_data='set_goal_return'),
+        types.InlineKeyboardButton('📊 Целевая структура (доли)', callback_data='set_goal_allocation'),
+        types.InlineKeyboardButton('⬅️ Назад', callback_data='menu_assets'),
     )
     return markup

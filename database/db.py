@@ -319,3 +319,11 @@ class CachedScoreDB(Base):
     verdict = Column(String)
     text_result = Column(String)  # Сохраняем готовый HTML-текст для бота
     updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class BotSettingsDB(Base):
+    __tablename__ = 'bot_settings'
+
+    key = Column(String, primary_key=True)
+    value = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow)
