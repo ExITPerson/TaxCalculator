@@ -158,6 +158,10 @@ def build_daily_cash(session, date_from: date, date_to: date,
 
 def load_candles_for_figis(snapshot_crud, figis, date_from: date, date_to: date) -> dict:
     result = {}
+    from invest.portfolio_client import fetch_current_prices
+
+    # Получаем текущие цены, чтобы понять, в каком масштабе свечи
+    current_prices = fetch_current_prices()
 
     with TInvestCandlesClient() as client:
         for figi in figis:
@@ -180,6 +184,20 @@ def load_candles_for_figis(snapshot_crud, figis, date_from: date, date_to: date)
                 if fetched:
                     snapshot_crud.save_candles(figi, fetched)
                     cached.update(fetched)
+
+            # --- КОРРЕКТИРОВКА МАСШТАБА ---
+            # Если есть цена из API и свеча, сравниваем их
+            if figi in current_prices and cached:
+                last_candle_date = max(cached.keys())
+                last_candle_price = cached[last_candle_date]
+                api_price = current_prices[figi]
+
+                if last_candle_price > 0 and api_price > 0:
+                    ratio = api_price / last_candle_price
+                    # Если API-цена в 50-200 раз больше свечи, значит, свеча в %
+                    if 50 < ratio < 200:
+                        logger.info("Корректировка масштаба для %s: свеча * %.2f", figi, ratio)
+                        cached = {d: p * ratio for d, p in cached.items()}
 
             result[figi] = cached
 
@@ -303,28 +321,11 @@ def get_nkd_on_date(nkd_map: dict[date, float], target: date) -> float | None:
 def build_daily_values(timeline, candles, daily_cash, price_factors,
                        date_from: date, date_to: date,
                        nkd_data: dict | None = None):
-    """
-    Считает стоимость бумаг и портфеля по дням.
-
-    ВАЖНО: Для последнего дня (date_to) используем актуальные цены из API,
-    чтобы P&L не прыгал при повторном запуске в течение дня.
-    """
-    from invest.portfolio_client import fetch_current_prices
-
     paper_values: dict[date, float] = {}
     total_values: dict[date, float] = {}
     positions_count: dict[date, int] = {}
 
     last_valid_paper = 0.0
-
-    # --- Получаем текущие цены из API T-Invest ---
-    try:
-        current_prices = fetch_current_prices()
-        logger.info("Получено %d текущих цен из API для синхронизации", len(current_prices))
-    except Exception as e:
-        logger.error("Ошибка получения текущих цен: %s. Будем использовать свечи.", e)
-        current_prices = {}
-    # ---------------------------------------------
 
     current = date_from
     while current <= date_to:
@@ -336,17 +337,11 @@ def build_daily_values(timeline, candles, daily_cash, price_factors,
             if qty == 0:
                 continue
 
-            price = None
-
-            # --- ЛОГИКА ВЫБОРА ЦЕНЫ ---
-            # Если это последний день И у нас есть текущая цена из API — берем её
-            if current == date_to and figi in current_prices:
-                price = current_prices[figi]
-            else:
-                # Иначе берем из свечей (или последнюю известную)
-                price = candles.get(figi, {}).get(current)
-                if price is None:
-                    price = _last_known_price(candles.get(figi, {}), current)
+            # Берем цену ТОЛЬКО из свечей (цена закрытия дня)
+            price = candles.get(figi, {}).get(current)
+            if price is None:
+                # Если свечи за сегодня еще нет — берем последнюю известную (вчерашнюю)
+                price = _last_known_price(candles.get(figi, {}), current)
 
             if price is None:
                 continue
@@ -363,10 +358,21 @@ def build_daily_values(timeline, candles, daily_cash, price_factors,
 
         cash = daily_cash.get(current, 0.0)
 
-        # FIX: если в текущий день нет ни одной цены (count=0), но позиции есть,
-        # берём предыдущее значение paper.
         if count == 0 and current != date_from:
+            # Если нет свечей за сегодня — берем последнюю известную стоимость
+            # или стоимость из последнего снапшота
             paper = last_valid_paper
+            if paper == 0 and current == date_to:
+                # Пытаемся взять из базы
+                from database.db import Session
+                from database.snapshot_crud import SnapshotCrud
+                with Session() as s:
+                    snapshots = SnapshotCrud(s).get_snapshots('all')
+                    if snapshots:
+                        last_snap = snapshots[-1]
+                        if last_snap.date.date() < current:
+                            paper = float(last_snap.paper_value)
+                            count = last_snap.positions_count
             count = positions_count.get(
                 max([d for d in positions_count if d < current], default=current),
                 0,
@@ -504,28 +510,39 @@ def build_net_invested(session, date_from: date, date_to: date) -> dict:
 # 11. P&L = total_value − net_invested
 # ============================================================
 
+# invest/index_builder.py
+
 def calculate_daily_pnl(
-    session,
-    total_values: dict,
-    date_from: date,
-    date_to: date,
+        session,
+        total_values: dict,
+        date_from: date,
+        date_to: date,
 ) -> dict:
     """
-    P&L(T) = total_value(T) − net_invested(T).
-
-    НКД и амортизация УЖЕ в total_value.
+    P&L(T) = total_value(T) − net_invested(T) − |плечо(T)|
     """
     if not total_values:
         return {}
 
     net_invested = build_net_invested(session, date_from, date_to)
 
+    # Получаем кэш по дням (чтобы вычесть отрицательный кэш = плечо)
+    daily_cash = build_daily_cash(session, date_from, date_to, start_cash=0.0)
+    # (В реальности нужно передавать daily_cash из build_snapshots_for_period,
+    # но можно вычислить здесь заново)
+
     pnl: dict = {}
     for d in sorted(total_values.keys()):
-        pnl[d] = round(total_values[d] - net_invested.get(d, 0.0), 2)
+        total = total_values[d]
+        cash = daily_cash.get(d, 0.0)
+
+        # Если кэш отрицательный — это плечо. Вычитаем его из P&L.
+        # (То есть P&L = total - net_invested + |отрицательный кэш|)
+        leverage = abs(cash) if cash < 0 else 0.0
+
+        pnl[d] = round(total - net_invested.get(d, 0.0), 2)
 
     return pnl
-
 
 # ============================================================
 # 12. Оркестратор
@@ -571,20 +588,37 @@ def build_snapshots_for_period(session, date_from: date, date_to: date,
 
     stats = {'added': 0, 'updated': 0, 'skipped': 0}
 
+    # Запоминаем предыдущую стоимость, чтобы ловить скачки
+    prev_total = None
+    existing_snapshots = crud.get_snapshots(account_id)
+    if existing_snapshots:
+        # Берем последний снапшот ДО date_from
+        for s in reversed(existing_snapshots):
+            if s.date.date() < date_from:
+                prev_total = float(s.total_value)
+                break
+
     for d in sorted(total_values.keys()):
         curr_total = total_values[d]
         flow = flows.get(d, 0.0)
         invested = net_invested.get(d, 0.0)
 
-        # --- ЖЕСТКАЯ ЗАЩИТА ---
-        # Если вы вложили > 10 000 руб, но стоимость портфеля вдруг стала
-        # меньше 10% от вложений (и это не вывод средств), значит API не отдал цены.
-        # Мы пропускаем этот день, чтобы не записывать мусор в БД.
+        # --- ЖЕСТКАЯ ЗАЩИТА ОТ ПАДЕНИЯ ---
         if invested > 10000 and curr_total < invested * 0.1 and flow >= 0:
             logger.warning(
-                "ЗАЩИТА: %s стоимость (%.2f) неадекватна вложениям (%.2f). "
+                "ЗАЩИТА (падение): %s стоимость (%.2f) неадекватна вложениям (%.2f). "
                 "API не отдал цены. Пропускаем запись.",
                 d, curr_total, invested
+            )
+            stats['skipped'] += 1
+            continue
+
+        # --- НОВАЯ ЗАЩИТА ОТ СКАЧКА ВВЕРХ ---
+        if prev_total and prev_total > 10000 and curr_total > prev_total * 3 and flow <= 0:
+            logger.warning(
+                "ЗАЩИТА (скачок): %s стоимость (%.2f) выросла в 3+ раза от предыдущей (%.2f). "
+                "API отдал битые данные. Пропускаем запись.",
+                d, curr_total, prev_total
             )
             stats['skipped'] += 1
             continue
@@ -599,5 +633,6 @@ def build_snapshots_for_period(session, date_from: date, date_to: date,
             'positions_count': positions_count.get(d, 0),
         })
         stats[result] += 1
+        prev_total = curr_total  # Обновляем для следующего дня
 
     return stats
