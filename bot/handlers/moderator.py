@@ -30,6 +30,7 @@ def _build_report_text(report: dict) -> str:
     insurance_to_pay_net = report.get('Взносы всего (с вычетом оплаченных)', 0)
     paid_taxes = report.get('Сумма оплаченных налогов', 0)
     paid_insurance = report.get('Сумма оплаченных страховых взносов', 0)
+    ndfl_salary = report.get('Налог за сотрудников', 0)
 
     return (
         "📊 <b>Финансовый отчёт</b>\n"
@@ -56,6 +57,9 @@ def _build_report_text(report: dict) -> str:
         f"    <i>из начисленного вычтено оплаченное: {_fmt(paid_taxes)}</i>\n"
         f"  • Взносы (всего):  <code>{_fmt(insurance_to_pay_net)}</code>\n"
         f"    <i>из начисленного вычтено оплаченное: {_fmt(paid_insurance)}</i>\n"
+        f"  • НДФЛ за сотрудников: <code>{_fmt(ndfl_salary)}</code>\n"
+        
+        f"  • Общее (Налоги и взносы): <code>{_fmt(ndfl_salary + insurance_to_pay_net + tax_to_pay_net)}</code>\n"
     )
 
 
