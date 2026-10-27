@@ -303,11 +303,28 @@ def get_nkd_on_date(nkd_map: dict[date, float], target: date) -> float | None:
 def build_daily_values(timeline, candles, daily_cash, price_factors,
                        date_from: date, date_to: date,
                        nkd_data: dict | None = None):
+    """
+    Считает стоимость бумаг и портфеля по дням.
+
+    ВАЖНО: Для последнего дня (date_to) используем актуальные цены из API,
+    чтобы P&L не прыгал при повторном запуске в течение дня.
+    """
+    from invest.portfolio_client import fetch_current_prices
+
     paper_values: dict[date, float] = {}
     total_values: dict[date, float] = {}
     positions_count: dict[date, int] = {}
 
     last_valid_paper = 0.0
+
+    # --- Получаем текущие цены из API T-Invest ---
+    try:
+        current_prices = fetch_current_prices()
+        logger.info("Получено %d текущих цен из API для синхронизации", len(current_prices))
+    except Exception as e:
+        logger.error("Ошибка получения текущих цен: %s. Будем использовать свечи.", e)
+        current_prices = {}
+    # ---------------------------------------------
 
     current = date_from
     while current <= date_to:
@@ -319,9 +336,18 @@ def build_daily_values(timeline, candles, daily_cash, price_factors,
             if qty == 0:
                 continue
 
-            price = candles.get(figi, {}).get(current)
-            if price is None:
-                price = _last_known_price(candles.get(figi, {}), current)
+            price = None
+
+            # --- ЛОГИКА ВЫБОРА ЦЕНЫ ---
+            # Если это последний день И у нас есть текущая цена из API — берем её
+            if current == date_to and figi in current_prices:
+                price = current_prices[figi]
+            else:
+                # Иначе берем из свечей (или последнюю известную)
+                price = candles.get(figi, {}).get(current)
+                if price is None:
+                    price = _last_known_price(candles.get(figi, {}), current)
+
             if price is None:
                 continue
 
