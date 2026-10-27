@@ -27,9 +27,17 @@ def _build_report_text(report: dict) -> str:
 
     # --- НОВЫЕ ПЕРЕМЕННЫЕ ДЛЯ ДЕТАЛИЗАЦИИ ---
     tax_to_pay_net = report.get('Налог к оплате (с вычетом оплаченных)', 0)
-    insurance_to_pay_net = report.get('Взносы всего (с вычетом оплаченных)', 0)
+    insurance_total_net = report.get('Взносы всего (с вычетом оплаченных)', 0)
+
+    # Детализация взносов
+    fee_ip = report.get('Страховые и пенсионные за ИП', 0)
+    contrib_employees = report.get('Страховые и пенсионные за сотрудников', 0)
+    accident = report.get('Взносы за травматизм', 0)
+
     paid_taxes = report.get('Сумма оплаченных налогов', 0)
     paid_insurance = report.get('Сумма оплаченных страховых взносов', 0)
+
+    # НДФЛ за сотрудников (он тоже обязателен к уплате)
     ndfl_salary = report.get('Налог за сотрудников', 0)
 
     return (
@@ -52,14 +60,19 @@ def _build_report_text(report: dict) -> str:
         f"  • Лимит:           <code>{_fmt(limit_total)}</code>\n"
         f"  • Остаток:         <code>{_fmt(limit_left)}</code>\n"
         "\n"
-        "🧾 <b>Налоги и взносы (к доплате)</b>\n"
+        "🧾 <b>Налоги(к доплате)</b>\n"
         f"  • УСН (налог):     <code>{_fmt(tax_to_pay_net)}</code>\n"
         f"    <i>из начисленного вычтено оплаченное: {_fmt(paid_taxes)}</i>\n"
-        f"  • Взносы (всего):  <code>{_fmt(insurance_to_pay_net)}</code>\n"
-        f"    <i>из начисленного вычтено оплаченное: {_fmt(paid_insurance)}</i>\n"
         f"  • НДФЛ за сотрудников: <code>{_fmt(ndfl_salary)}</code>\n"
-        
-        f"  • Общее (Налоги и взносы): <code>{_fmt(ndfl_salary + insurance_to_pay_net + tax_to_pay_net)}</code>\n"
+        "\n"
+        "🏦 <b>Детализация взносов (к оплате)</b>\n"
+        f"  • Пенсионные/страховые за ИП: <code>{_fmt(fee_ip)}</code>\n"
+        f"  • Страховые за сотрудников:   <code>{_fmt(contrib_employees)}</code>\n"
+        f"  • Взносы за травматизм:       <code>{_fmt(accident)}</code>\n"
+        f"  • <b>Итого взносов:</b>       <code>{_fmt(insurance_total_net)}</code>\n"
+        f"    <i>из начисленного вычтено оплаченное: {_fmt(paid_insurance)}</i>\n"
+
+        f"  • <b>Итого к оплате (налоги и взносы):</b>       <code>{_fmt(insurance_total_net + tax_to_pay_net + ndfl_salary)}</code>\n"
     )
 
 
