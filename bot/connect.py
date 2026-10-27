@@ -77,7 +77,7 @@ def run_scheduler():
 
     # ВАЖНО: Время в schedule указывается в часовом поясе сервера (обычно UTC).
     # 06:00 UTC = 09:00 МСК
-    schedule.every().day.at("06:00").do(send_digest)
+    schedule.every().day.at("10:00").do(send_digest)
 
     # 00:00 UTC = 03:00 МСК (обновление оценок, пока вы спите)
     schedule.every().day.at("00:00").do(refresh_all)
