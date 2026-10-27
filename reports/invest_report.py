@@ -116,6 +116,13 @@ def format_invest_summary(report: dict, top_n: int = TOP_ON_SUMMARY) -> str:
     total_value = sum(p.get('total_amount_portfolio', 0) for p in portfolios.values())
     total_expected_yield = sum(p.get('expected_yield', 0) for p in portfolios.values())
 
+    # --- РАСЧЕТ РЕАЛЬНОГО P&L ---
+    # P&L = Стоимость портфеля - Внесенные деньги (net)
+    real_pnl_gross = total_value - net
+    real_pnl_net = real_pnl_gross - fees  # <--- Вычитаем комиссии и налоги
+
+    real_pnl_pct = (real_pnl_net / net * 100) if net > 0 else 0
+
     lines = [
         "📈 <b>Инвестиционный портфель</b>",
         "━━━━━━━━━━━━━━━━━━━━━",
@@ -148,6 +155,11 @@ def format_invest_summary(report: dict, top_n: int = TOP_ON_SUMMARY) -> str:
         "━━━━━━━━━━━━━━━━━━━━━",
         "📊 <b>Текущий портфель</b>",
         f"  • Стоимость:       <code>{_fmt(total_value)}</code>",
+
+        # --- ВЫВОДИМ РЕАЛЬНЫЙ P&L ---
+        f"  • <b>Реальный P&L:</b> <code>{_fmt(real_pnl_net)}</code> (<code>{real_pnl_pct:+.2f}%</code>)",
+
+        # Оставляем нереализованный для справки
         f"  • Нереализ. P&L:   <code>{_fmt(total_expected_yield)}</code>",
         "",
     ]

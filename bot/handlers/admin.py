@@ -2,7 +2,7 @@ from bot.instance import bot_tg
 from bot.decorator import (
     require_role, require_role_cb, Role, clear_role_cache, get_user_role,
 )
-from bot.keyboard import back_to_menu, users_menu
+from bot.keyboard import back_to_menu, users_menu, main_menu
 from database.db import Session
 from database.crud import UserCrud, CashWithdrawalCrud, BalanceAdjustmentCrud, CrudDB
 from reports.report import build_detailed_report
@@ -504,3 +504,59 @@ def cmd_adjust_del(message):
     with Session() as session:
         ok = BalanceAdjustmentCrud(session).delete(int(parts[1]))
     bot_tg.reply_to(message, "✅ Удалено." if ok else "❌ Запись не найдена.")
+
+
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'manual_income_add')
+@require_role_cb(Role.ADMIN)
+def cb_manual_income(call):
+    msg = bot_tg.edit_message_text(
+        "➕ <b>Ручное поступление</b>\n\n"
+        "Введи <b>сумму</b>, <b>описание</b> и <b>контрагента</b> (опционально) через пробел.\n"
+        "Например: <code>50000 Оплата от ООО Ромашка</code>\n\n"
+        "<i>Отмена: «отмена»</i>",
+        call.message.chat.id, call.message.message_id,
+        parse_mode='HTML', reply_markup=back_to_menu()
+    )
+    bot_tg.answer_callback_query(call.id)
+    bot_tg.register_next_step_handler(msg, process_manual_income)
+
+
+def process_manual_income(message):
+    text = (message.text or '').strip()
+    if text.lower() in ('отмена', 'cancel'):
+        bot_tg.send_message(message.chat.id, "Отменено.", reply_markup=main_menu(Role.ADMIN))
+        return
+
+    parts = text.split(maxsplit=1)
+    try:
+        amount = float(parts[0].replace(',', '.'))
+        if amount <= 0:
+            raise ValueError
+    except (ValueError, IndexError):
+        bot_tg.send_message(message.chat.id, "⚠️ Введи положительное число в начале. Попробуй снова.")
+        bot_tg.register_next_step_handler(message, process_manual_income)
+        return
+
+    description = parts[1] if len(parts) > 1 else 'Ручное поступление'
+
+    # Пытаемся выделить контрагента (если в описании есть "от ...")
+    counterparty = ''
+    if 'от ' in description.lower():
+        # Просто сохраняем всё описание как контрагента для простоты
+        counterparty = description
+
+    with Session() as s:
+        CrudDB(s).add_manual_income(
+            amount=amount,
+            description=description,
+            counterparty_name=counterparty,
+        )
+
+    bot_tg.send_message(
+        message.chat.id,
+        f"✅ Поступление <b>{amount:,.2f} ₽</b> добавлено.\n"
+        f"Описание: {description}\n"
+        f"Оно будет учтено в выручке и налогах УСН.",
+        parse_mode='HTML',
+        reply_markup=main_menu(Role.ADMIN)
+    )

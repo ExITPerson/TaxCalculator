@@ -77,13 +77,14 @@ def build_daily_flows(session, date_from: date, date_to: date) -> dict:
 
     day = day_expr(InvestOperationDB.date)
 
+    # ТОЛЬКО пополнения и выводы. Купоны и дивиденды — это доход, а не поток.
     rows = (
         session.query(
             day.label('day'),
             func.coalesce(func.sum(InvestOperationDB.payment_amount), 0),
         )
         .filter(
-            InvestOperationDB.kind.in_(['deposit', 'withdraw', 'coupon', 'dividend']),
+            InvestOperationDB.kind.in_(['deposit', 'withdraw']),
             InvestOperationDB.date >= datetime.combine(date_from, datetime.min.time()),
             InvestOperationDB.date <= datetime.combine(date_to, datetime.max.time()),
             or_(
@@ -99,7 +100,6 @@ def build_daily_flows(session, date_from: date, date_to: date) -> dict:
     for day_val, total in rows:
         if not day_val:
             continue
-        # day_val может быть date (SQLite) или datetime (PG)
         d = day_val.date() if hasattr(day_val, 'date') else day_val
         if not isinstance(d, date):
             d = datetime.fromisoformat(str(day_val)).date()

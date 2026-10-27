@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Iterable, Optional
@@ -295,6 +296,37 @@ class CrudDB:
             })
 
         return sorted(result, key=lambda x: x['total'], reverse=True)
+
+    def add_manual_income(self, amount: float, description: str = '', counterparty_name: str = '') -> OperationsDB:
+        """
+        Добавляет ручную операцию поступления.
+        category = 'Поступление', direction = 'IN'.
+        """
+        # Генерируем уникальный ID, чтобы не пересечься с реальными
+        op_id = f"manual_{uuid.uuid4().hex[:12]}"
+
+        # Ищем или создаём контрагента
+        cp = None
+        if counterparty_name:
+            cp = self.__session.query(CounterpartyDB).filter_by(name=counterparty_name).first()
+            if not cp:
+                cp = CounterpartyDB(name=counterparty_name, inn='')
+                self.__session.add(cp)
+                self.__session.flush()
+
+        op = OperationsDB(
+            operation_id=op_id,
+            date=datetime.utcnow(),
+            amount=amount,
+            category=OperationCategory.INCOME.value,  # "Поступление"
+            direction='IN',
+            description=description or 'Ручное поступление',
+            merchant=None,
+            counterparty_id=cp.id if cp else None,
+        )
+        self.__session.add(op)
+        self.__session.commit()
+        return op
 
 
 class UserCrud:

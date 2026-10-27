@@ -14,6 +14,8 @@ def _fmt(value: float) -> str:
     return f"{value:,.2f} ₽".replace(",", " ")
 
 
+# bot/moderator.py
+
 def _build_report_text(report: dict) -> str:
     income = report.get('Поступления (выручка)', 0)
     balance_real = report.get('Реальный остаток на счету', 0)
@@ -21,9 +23,13 @@ def _build_report_text(report: dict) -> str:
     salary_paid = report.get('Сумма выплаченной ЗП', 0)
     limit_left = report.get('Остаток до лимита УСН', 0)
     limit_total = report.get('Лимит УСН', 0)
-    tax_total = report.get('Сумма всех расходов на налоги и взносы', 0)
-    tax_paid = report.get('Сумма оплаченных налогов и взносов (итого)', 0)
     cash_manual = report.get('Снятия наличных (вручную)', 0)
+
+    # --- НОВЫЕ ПЕРЕМЕННЫЕ ДЛЯ ДЕТАЛИЗАЦИИ ---
+    tax_to_pay_net = report.get('Налог к оплате (с вычетом оплаченных)', 0)
+    insurance_to_pay_net = report.get('Взносы всего (с вычетом оплаченных)', 0)
+    paid_taxes = report.get('Сумма оплаченных налогов', 0)
+    paid_insurance = report.get('Сумма оплаченных страховых взносов', 0)
 
     return (
         "📊 <b>Финансовый отчёт</b>\n"
@@ -45,10 +51,11 @@ def _build_report_text(report: dict) -> str:
         f"  • Лимит:           <code>{_fmt(limit_total)}</code>\n"
         f"  • Остаток:         <code>{_fmt(limit_left)}</code>\n"
         "\n"
-        "🧾 <b>Налоги и взносы</b>\n"
-        f"  • Оплачено всего:  <code>{_fmt(tax_paid)}</code>\n"
-        f"  • К оплате:        <code>{_fmt(tax_total)}</code>\n"
-        "  <i>к доплате за вычетом уже уплаченного</i>"
+        "🧾 <b>Налоги и взносы (к доплате)</b>\n"
+        f"  • УСН (налог):     <code>{_fmt(tax_to_pay_net)}</code>\n"
+        f"    <i>из начисленного вычтено оплаченное: {_fmt(paid_taxes)}</i>\n"
+        f"  • Взносы (всего):  <code>{_fmt(insurance_to_pay_net)}</code>\n"
+        f"    <i>из начисленного вычтено оплаченное: {_fmt(paid_insurance)}</i>\n"
     )
 
 
