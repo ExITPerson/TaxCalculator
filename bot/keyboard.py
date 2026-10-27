@@ -21,6 +21,7 @@ def main_menu(role: Role) -> types.InlineKeyboardMarkup:
     if ROLE_LEVEL[role] >= ROLE_LEVEL[Role.ADMIN]:
         markup.add(
             types.InlineKeyboardButton('⚖️ Корректировка', callback_data='balance_adjust'),
+            types.InlineKeyboardButton('➕ Ручное поступление', callback_data='manual_income_add'),
         )
         markup.add(
             types.InlineKeyboardButton('📈 Портфель', callback_data='menu_invest'),

@@ -1,7 +1,7 @@
 from bot.instance import bot_tg
 from bot.decorator import get_user_role, Role, require_role
 from bot.keyboard import main_menu
-from database.crud import CashWithdrawalCrud
+from database.crud import CashWithdrawalCrud, CrudDB
 from database.db import Session
 
 
@@ -134,3 +134,25 @@ def cmd_bond(message):
     else:
         msg = bot_tg.reply_to(message, "Введи ISIN облигации:")
         bot_tg.register_next_step_handler(msg, process_bond_isin)
+
+
+@bot_tg.message_handler(commands=['income_add'])
+@require_role(Role.ADMIN)
+def cmd_income_add(message):
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 2:
+        bot_tg.reply_to(message, "Использование: <code>/income_add 50000 Описание</code>", parse_mode='HTML')
+        return
+
+    try:
+        amount = float(parts[1].replace(',', '.'))
+        if amount <= 0:
+            raise ValueError
+    except ValueError:
+        bot_tg.reply_to(message, "⚠️ Сумма должна быть положительным числом.")
+        return
+
+    desc = parts[2] if len(parts) > 2 else 'Ручное поступление'
+    with Session() as s:
+        CrudDB(s).add_manual_income(amount, desc, desc)
+    bot_tg.reply_to(message, f"✅ Добавлено: {amount:,.2f} ₽")
