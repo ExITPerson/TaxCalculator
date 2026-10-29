@@ -592,7 +592,6 @@ def build_snapshots_for_period(session, date_from: date, date_to: date,
     prev_total = None
     existing_snapshots = crud.get_snapshots(account_id)
     if existing_snapshots:
-        # Берем последний снапшот ДО date_from
         for s in reversed(existing_snapshots):
             if s.date.date() < date_from:
                 prev_total = float(s.total_value)
@@ -602,18 +601,33 @@ def build_snapshots_for_period(session, date_from: date, date_to: date,
         curr_total = total_values[d]
         flow = flows.get(d, 0.0)
         invested = net_invested.get(d, 0.0)
+        cash = daily_cash.get(d, 0.0)
+
+        # --- ФИКСАЦИЯ СНАПШОТА НА СЕГОДНЯ ---
+        # Если это сегодняшний день и снапшот уже есть — не обновляем его,
+        # чтобы P&L не прыгал при каждом перезапуске.
+        if d == date.today():
+            existing = crud.get_snapshot(d, account_id)
+            if existing:
+                logger.info("Снапшот за %s уже есть — фиксируем (не обновляем)", d)
+                stats['skipped'] += 1
+                continue
 
         # --- ЖЕСТКАЯ ЗАЩИТА ОТ ПАДЕНИЯ ---
         if invested > 10000 and curr_total < invested * 0.1 and flow >= 0:
-            logger.warning(
-                "ЗАЩИТА (падение): %s стоимость (%.2f) неадекватна вложениям (%.2f). "
-                "API не отдал цены. Пропускаем запись.",
-                d, curr_total, invested
-            )
-            stats['skipped'] += 1
-            continue
+            # Проверяем, есть ли плечо (отрицательный кэш)
+            if cash < 0 and abs(cash) > invested * 0.5:
+                logger.info("Плечо (%.2f) — защита от падения пропущена для %s", cash, d)
+            else:
+                logger.warning(
+                    "ЗАЩИТА (падение): %s стоимость (%.2f) неадекватна вложениям (%.2f). "
+                    "API не отдал цены. Пропускаем запись.",
+                    d, curr_total, invested
+                )
+                stats['skipped'] += 1
+                continue
 
-        # --- НОВАЯ ЗАЩИТА ОТ СКАЧКА ВВЕРХ ---
+        # --- ЗАЩИТА ОТ СКАЧКА ВВЕРХ ---
         if prev_total and prev_total > 10000 and curr_total > prev_total * 3 and flow <= 0:
             logger.warning(
                 "ЗАЩИТА (скачок): %s стоимость (%.2f) выросла в 3+ раза от предыдущей (%.2f). "
@@ -633,6 +647,6 @@ def build_snapshots_for_period(session, date_from: date, date_to: date,
             'positions_count': positions_count.get(d, 0),
         })
         stats[result] += 1
-        prev_total = curr_total  # Обновляем для следующего дня
+        prev_total = curr_total
 
     return stats

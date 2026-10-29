@@ -80,7 +80,7 @@ def run_scheduler():
     schedule.every().day.at("10:00").do(send_digest)
 
     # 00:00 UTC = 03:00 МСК (обновление оценок, пока вы спите)
-    schedule.every().day.at("00:00").do(refresh_all)
+    schedule.every().day.at("09:30").do(refresh_all)
 
     # (Опционально) Можно добавить тестовое время, чтобы проверить работу:
     # schedule.every().day.at("12:30").do(send_digest)
