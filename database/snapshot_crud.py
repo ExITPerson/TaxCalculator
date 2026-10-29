@@ -130,3 +130,13 @@ class SnapshotCrud:
 
         self.__session.commit()
         return added
+
+
+    def get_snapshot(self, d: date, account_id: str = 'all') -> PortfolioSnapshotDB | None:
+        """Возвращает снапшот за конкретную дату (или None)."""
+        dt = datetime.combine(d, datetime.min.time())
+        return (
+            self.__session.query(PortfolioSnapshotDB)
+            .filter_by(date=dt, account_id=account_id)
+            .first()
+        )

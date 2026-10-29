@@ -16,6 +16,7 @@ def main_menu(role: Role) -> types.InlineKeyboardMarkup:
         )
         markup.add(
             types.InlineKeyboardButton('📏 Лимит', callback_data='limit'),
+            types.InlineKeyboardButton('📅 Налоги по кварталам', callback_data='quarterly_taxes'),
         )
 
     if ROLE_LEVEL[role] >= ROLE_LEVEL[Role.ADMIN]:

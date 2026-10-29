@@ -3,7 +3,7 @@ from bot.decorator import require_role_cb, Role
 from bot.keyboard import back_to_menu
 from database.db import Session
 from database.crud import CrudDB, CashWithdrawalCrud, BalanceAdjustmentCrud
-from reports.report import build_detailed_report
+from reports.report import build_detailed_report, build_quarterly_report
 from sync.operations import sync_operations
 
 
@@ -171,3 +171,57 @@ def cb_limit(call):
         reply_markup=back_to_menu(),
     )
     bot_tg.answer_callback_query(call.id)
+
+
+@bot_tg.callback_query_handler(func=lambda c: c.data == 'quarterly_taxes')
+@require_role_cb(Role.MODERATOR)
+def cb_quarterly_taxes(call):
+    bot_tg.answer_callback_query(call.id, "📅 Считаю налоги по кварталам...")
+
+    with Session() as s:
+        crud = CrudDB(s)
+        quarters = build_quarterly_report(crud)
+
+    if not quarters:
+        bot_tg.send_message(call.message.chat.id, "Нет данных за текущий год.")
+        return
+
+    text = "📅 <b>Налоги и взносы по кварталам</b>\n\n"
+
+    total_tax_to_pay = 0
+    total_ins_to_pay = 0
+
+    for q in quarters:
+        text += f"<b>{q['quarter']} квартал</b>\n"
+        text += f"  • Выручка: <code>{q['revenue']:,.2f} ₽</code>\n"
+
+        # Налог УСН: исходный, после вычета, оплачено, к доплате
+        text += f"  • Налог УСН: <code>{q['tax_total']:,.2f} ₽</code>\n"
+        text += f"  • Налог после вычета взносов: <code>{q['tax_to_pay_gross']:,.2f} ₽</code>\n"
+        text += f"  • Оплачено налога: <code>{q['tax_paid']:,.2f} ₽</code>\n"
+        text += f"  • <b>К доплате налога:</b> <code>{q['tax_to_pay']:,.2f} ₽</code>\n"
+
+        # Взносы: начислено, оплачено, к доплате
+        text += f"  • Взносы начислено: <code>{q['insurance_total']:,.2f} ₽</code>\n"
+        text += f"  • Оплачено взносов: <code>{q['insurance_paid']:,.2f} ₽</code>\n"
+        text += f"  • <b>К доплате взносов:</b> <code>{q['insurance_to_pay']:,.2f} ₽</code>\n"
+
+        text += f"  • <b>Итого к оплате за квартал:</b> <code>{q['total_to_pay']:,.2f} ₽</code>\n\n"
+
+        total_tax_to_pay += q['tax_to_pay']
+        total_ins_to_pay += q['insurance_to_pay']
+
+    text += "━━━━━━━━━━━━━━━━━━━━━\n"
+    text += f"🧾 <b>Всего к доплате за год:</b>\n"
+    text += f"  • Налог УСН: <code>{total_tax_to_pay:,.2f} ₽</code>\n"
+    text += f"  • Взносы: <code>{total_ins_to_pay:,.2f} ₽</code>\n"
+    text += f"  • <b>Итого: <code>{total_tax_to_pay + total_ins_to_pay:,.2f} ₽</code></b>\n"
+
+    text += "\n<i>* Данные по оплаченным налогам и взносам берутся из базы (операции Т-Банка).</i>"
+
+    bot_tg.send_message(
+        call.message.chat.id,
+        text,
+        parse_mode='HTML',
+        reply_markup=back_to_menu()
+    )

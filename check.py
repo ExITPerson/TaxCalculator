@@ -1,49 +1,48 @@
-# debug_28.py
-from datetime import date, timedelta
-from database.db import Session, InvestOperationDB
-from database.snapshot_crud import SnapshotCrud
-from invest.index_builder import (
-    build_positions_timeline, build_daily_flows, build_daily_cash,
-    load_candles_for_figis, compute_price_factors, build_daily_values,
-    load_accrued_interests
-)
-from invest.start_state import compute_start_state
-from config.settings import ACCOUNTS_ID
+# test_quarters.py
+from database.db import Session
+from database.crud import CrudDB
+from reports.report import build_quarterly_report
 
-target = date(2026, 10, 28)
-prev = target - timedelta(days=1)
-
-# 1. Смотрим start_state на 27.10
-start_positions, start_cash = compute_start_state(prev, ACCOUNTS_ID)
-print(f"Start state на {prev}:")
-print(f"  Позиций: {len(start_positions)}")
-print(f"  Кэш: {start_cash:,.2f}")
-
-# 2. Строим timeline, flows, cash
 with Session() as s:
-    crud = SnapshotCrud(s)
-    timeline = build_positions_timeline(s, target, target, start_positions=start_positions)
-    flows = build_daily_flows(s, target, target)
-    daily_cash = build_daily_cash(s, target, target, start_cash=start_cash)
+    crud = CrudDB(s)
+    quarters = build_quarterly_report(crud)
 
-    print(f"\nFlows за {target}: {flows}")
-    print(f"Daily cash: {daily_cash}")
+if not quarters:
+    print("Нет данных за текущий год.")
+else:
+    text = "📅 <b>Налоги и взносы по кварталам</b>\n\n"
 
-    # 3. Загружаем свечи
-    figis = list(timeline.keys())
-    candles = load_candles_for_figis(crud, figis, target, target)
+    total_tax_to_pay = 0
+    total_ins_to_pay = 0
 
-    # 4. Смотрим, есть ли свечи за 28.10
-    missing_candles = [f for f in figis if target not in candles.get(f, {})]
-    print(f"\nБумаг без свечи за {target}: {len(missing_candles)}")
+    for q in quarters:
+        text += f"<b>{q['quarter']} квартал</b>\n"
+        text += f"  • Выручка: <code>{q['revenue']:,.2f} ₽</code>\n"
 
-    # 5. Считаем paper_values
-    price_factors = compute_price_factors(s, timeline, candles)
-    nkd_data = load_accrued_interests(s, figis, target, target)
-    paper_values, total_values, positions_count = build_daily_values(
-        timeline, candles, daily_cash, price_factors, target, target, nkd_data=nkd_data
-    )
+        # Налог УСН: исходный, после вычета, оплачено, к доплате
+        text += f"  • Налог УСН: <code>{q['tax_total']:,.2f} ₽</code>\n"
+        text += f"  • Налог после вычета взносов: <code>{q['tax_to_pay_gross']:,.2f} ₽</code>\n"
+        text += f"  • Оплачено налога: <code>{q['tax_paid']:,.2f} ₽</code>\n"
+        text += f"  • <b>К доплате налога:</b> <code>{q['tax_to_pay']:,.2f} ₽</code>\n"
 
-    print(f"\nPaper values: {paper_values}")
-    print(f"Total values: {total_values}")
-    print(f"Positions count: {positions_count}")
+        # Взносы: начислено, оплачено, к доплате
+        text += f"  • Взносы начислено: <code>{q['insurance_total']:,.2f} ₽</code>\n"
+        text += f"  • Оплачено взносов: <code>{q['insurance_paid']:,.2f} ₽</code>\n"
+        text += f"  • <b>К доплате взносов:</b> <code>{q['insurance_to_pay']:,.2f} ₽</code>\n"
+
+        text += f"  • <b>Итого к оплате за квартал:</b> <code>{q['total_to_pay']:,.2f} ₽</code>\n\n"
+
+        total_tax_to_pay += q['tax_to_pay']
+        total_ins_to_pay += q['insurance_to_pay']
+
+    text += "━━━━━━━━━━━━━━━━━━━━━\n"
+    text += f"🧾 <b>Всего к доплате за год:</b>\n"
+    text += f"  • Налог УСН: <code>{total_tax_to_pay:,.2f} ₽</code>\n"
+    text += f"  • Взносы: <code>{total_ins_to_pay:,.2f} ₽</code>\n"
+    text += f"  • <b>Итого: <code>{total_tax_to_pay + total_ins_to_pay:,.2f} ₽</code></b>\n"
+
+    text += "\n<i>* Данные по оплаченным налогам и взносам берутся из базы (операции Т-Банка).</i>"
+
+    # Выводим текст в консоль (как он будет выглядеть в Telegram)
+    print("\n=== ТЕКСТ ДЛЯ БОТА ===\n")
+    print(text)
